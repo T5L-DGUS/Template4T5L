@@ -128,7 +128,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define cmdMP4_LOOP_MODE_SET	   	0x90
 #define cmdMP4_STORAGE_MEDIUM_STATUS 0xb0
 #define cmdMP4_NOW_PLAY_NUMBER      0xb1
-#define STORAGE_DISCONN_PAGE         24
+#define STORAGE_DISCONN_PAGE         20
 #define cmdWIFI_SCAN                0xc0
 #define cmdWIFI_CONNECT             0xc1
 #define cmdSET_TERNARY_CODE         0xf0

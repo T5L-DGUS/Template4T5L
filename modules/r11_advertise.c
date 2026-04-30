@@ -135,11 +135,11 @@ static void R11NoneTouchRecoveryPlayVideo()
 		{
 			count = 0;
 			read_dgus_vp(sysDGUS_PIC_NOW,(uint8_t *)&now_pic,1);
-			if(now_pic != (uint16_t)page_st.fullvideo_page && now_pic != STORAGE_DISCONN_PAGE)
+			if(now_pic != (uint16_t)page_st.fullvideo_page && now_pic != (uint16_t)page_st.video_page&& now_pic != STORAGE_DISCONN_PAGE)
 			{
 				prev_pic = now_pic;
 				T5lSendUartDataToR11(cmdMP4_REPLAY,NULL);
-				SwitchPageById((uint16_t)page_st.fullvideo_page);
+				SwitchPageById((uint16_t)page_st.video_page);
 			}
 		}
 	}else{
@@ -157,7 +157,12 @@ static void R11NoneTouchRecoveryPlayVideo()
 	}else if(key_value == 0x0201)
 	{
 		T5lSendUartDataToR11(cmdMP4_LOOP_MODE_SET,(uint8_t *)&recycle_set);
-		SwitchPageById((uint16_t)page_st.fullvideo_page);
+		SwitchPageById((uint16_t)page_st.video_page);
+		write_dgus_vp(R11_SCAN_ADDRESS,(uint8_t *)&zero_value,1);
+	}else if(key_value == 0x0202)
+	{
+		T5lSendUartDataToR11(cmdMP4_PAUSE,NULL);
+		SwitchPageById(prev_pic);
 		write_dgus_vp(R11_SCAN_ADDRESS,(uint8_t *)&zero_value,1);
 	}
 }
