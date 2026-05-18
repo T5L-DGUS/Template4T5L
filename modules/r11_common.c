@@ -1438,6 +1438,18 @@ void inter_extern1_1_fun_C ( void ) interrupt 2
 												RAMMODE = 0x00;
 
 
+                                                while (DATA1 == 0x00 && DATA0 == 0x01)
+                                                {
+                                                    delay_ms(1);
+                                                    RAMMODE = 0xAF;
+                                                    while (!APP_ACK)
+                                                        ;
+                                                    APP_EN = 1;
+                                                    while (APP_EN)
+                                                        ;
+                                                    RAMMODE = 0x00;
+                                                }
+                                                
                                                 ADR_H = Icon_Overlay_SP[Index] >> 17;
                                                 ADR_M = Icon_Overlay_SP[Index] >> 9;
                                                 ADR_L = Icon_Overlay_SP[Index] >> 1;
@@ -1538,8 +1550,18 @@ void inter_extern1_1_fun_C ( void ) interrupt 2
 												while ( APP_EN );
 												RAMMODE = 0x00;
 
-
-											
+                                                
+                                                while (DATA1 == 0x00 && DATA0 == 0x01)
+                                                {
+                                                    delay_ms(1);
+                                                    RAMMODE = 0xAF;
+                                                    while (!APP_ACK)
+                                                        ;
+                                                    APP_EN = 1;
+                                                    while (APP_EN)
+                                                        ;
+                                                    RAMMODE = 0x00;
+                                                }
 
                                                 ADR_H = Icon_Overlay_SP[Index] >> 17;
                                                 ADR_M = Icon_Overlay_SP[Index] >> 9;
