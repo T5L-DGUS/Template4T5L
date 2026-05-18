@@ -90,6 +90,8 @@ uint16_t pixels_arr_l[5]={1080,600,600,480,768};
 uint16_t pixels_arr_h2[5]={1920,1024,800,800,1024};
 uint16_t pixels_arr_l2[5]={1080,600,600,480,768};
 
+uint16_t first_in_flag = 0;  /* 用于标识是否第一次进入视频播放，第一次进入需要特殊处理 */
+
 void T5lJpegInit(void)
 {
     P1MDOUT         =   0x00;
@@ -361,6 +363,7 @@ static void R11PlayHighlightVideo(void)
      * 
      */
     uint8_t r11_send_buf[6],i;
+    static uint16_t first_begin = 0;
     /*全部清除显示*/
     for(i=0;i<5;i++)
     {
@@ -369,10 +372,16 @@ static void R11PlayHighlightVideo(void)
     if(r11_player.now_play_serial == 0)
     {
         /*循环到第一个视频了*/
-        r11_player.now_play_page = 1;
-        r11_send_buf[0] = r11_player.store_type;
-        r11_send_buf[1] = r11_player.Document_type = MP4;
-        T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
+        if(first_begin == 0)
+        {
+            first_begin = 1;
+        }else{
+            r11_player.now_play_page = 1;
+            r11_send_buf[0] = r11_player.store_type;
+            r11_send_buf[1] = r11_player.Document_type = MP4;
+            T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
+        }
+        
     }
     if( r11_player.now_play_serial >= (r11_player.now_play_page-1) * 5 && r11_player.now_play_serial < r11_player.now_play_page * 5 && r11_player.now_play_serial < r11_player.total_serial)
     {
@@ -391,9 +400,14 @@ static void R11PlayHighlightVideo(void)
 void R11VideoPlayerProcess(void)
 {
     static uint16_t search_retry_count = 10;
-    static uint16_t read_param[6] = 0;     /**@note 需要改为静态变量，因为会多次进入此函数 */
+    static uint16_t read_param[8] = 0;     /**@note 需要改为静态变量，因为会多次进入此函数 */
     uint16_t rotate_angle;
     uint8_t r11_send_buf[6];
+
+    if(!((first_in_flag == 0 && video_init_process == VIDEO_PROCESS_UNINIT) || first_in_flag == 1))
+    {
+        return;
+    }
     if(video_init_process == VIDEO_PROCESS_UNINIT)
     {
 	    T5lJpegInit();
@@ -405,9 +419,12 @@ void R11VideoPlayerProcess(void)
         r11_player.now_play_serial = 0;
         r11_player.total_serial = 0;
         /** 0.读取音量和循环信息 */
-        FlashToDgus(flashMAIN_BLOCK_ORDER, VOLUME_SET_ADDR, VOLUME_SET_ADDR,0x06);
+        FlashToDgus(flashMAIN_BLOCK_ORDER, VOLUME_SET_ADDR, VOLUME_SET_ADDR,0x08);
         read_dgus_vp(VOLUME_SET_ADDR, (uint8_t *)&read_param[0], 6);
         video_init_process = VIDEO_PROCESS_VOLUME;
+        read_param[0] = MAX_VOLUME;
+        read_param[2] = 0x0102;
+        read_param[5] = 0x0001;
     }else if(video_init_process == VIDEO_PROCESS_VOLUME)
     {
         if(read_param[0] > MAX_VOLUME)
@@ -476,13 +493,17 @@ void R11VideoPlayerProcess(void)
         video_init_process = VIDEO_PROCESS_QUERY;
     }else if(video_init_process == VIDEO_PROCESS_QUERY)
     {
-        #if sysBEAUTY_MODE_ENABLED
-        r11_send_buf[0] = r11_player.store_type = SDCARD;
-        #elif sysADVERTISE_MODE_ENABLED
-        r11_send_buf[0] = r11_player.store_type = exUDISK;
-        #else
-        r11_send_buf[0] = r11_player.store_type = SDCARD;
-        #endif /* sysADVERTISE_MODE_ENABLED END */
+        // #if sysBEAUTY_MODE_ENABLED
+        // r11_send_buf[0] = r11_player.store_type = SDCARD;
+        // #elif sysADVERTISE_MODE_ENABLED
+        // r11_send_buf[0] = r11_player.store_type = exUDISK;
+        // #else
+        // r11_send_buf[0] = r11_player.store_type = SDCARD;
+        // #endif /* sysADVERTISE_MODE_ENABLED END */
+        if(read_param[6] == exUDISK||read_param[6] == SDCARD)
+        {
+            r11_send_buf[0] = r11_player.store_type = (uint8_t)read_param[6];
+        }
         r11_send_buf[1] = MP4;
         T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
         if((read_param[2]&0xff00) != 0x0000)
@@ -499,7 +520,7 @@ void R11VideoPlayerProcess(void)
         if (r11_send_buf[0] < r11_player.page_mp4_nums) {
             r11_player.serial = r11_send_buf[0];
             write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,(uint8_t*)&mp4_name[r11_player.serial][0], MAX_MP3_NAME_LEN>>1);
-            T5lSendUartDataToR11(cmdMP4_PLAY, mp4_name[r11_player.serial]);
+            // T5lSendUartDataToR11(cmdMP4_PLAY, mp4_name[r11_player.serial]);
             video_init_process = VIDEO_PROCESS_SET_LOOP;
             /*对第一个结果进行高亮显示*/
             write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_red,1);
@@ -530,6 +551,7 @@ void R11VideoPlayerProcess(void)
 void R11VideoValueHandle(uint16_t dgus_value)
 {
     uint8_t r11_send_buf[6],i;
+    uint16_t write_param[2];
     if(dgus_value == keyMP4_REPLAY)
     {
         r11_send_buf[0] = 0x00;
@@ -636,6 +658,9 @@ void R11VideoValueHandle(uint16_t dgus_value)
         r11_send_buf[1] = r11_player.Document_type = MP4;
         T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
         memset((uint8_t *)mp4_name, 0, sizeof(mp4_name));
+        write_param[0] = (uint16_t)r11_player.store_type;
+        write_dgus_vp(PLAY_DISK_MODE_ADDR,(uint8_t*)&write_param[0],1);
+        DgusToFlash(flashMAIN_BLOCK_ORDER, PLAY_DISK_MODE_ADDR, PLAY_DISK_MODE_ADDR,0x02);
     }else if(dgus_value == keyMP4_NEXTFILE)
     {
         if(r11_player.now_play_page < (r11_player.total_serial + 4) / 5)

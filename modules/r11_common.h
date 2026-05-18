@@ -53,6 +53,8 @@ extern uint16_t Locate_arr[10];
 extern volatile uint8_t data data_write_f;
 extern volatile uint8_t data Bit8_16_Flag;
 
+extern uint16_t first_in_flag;
+
 /**
  * @enum VIDEO_INIT_PROCESS
  * @brief 视频初始化流程枚举类型。
@@ -97,6 +99,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define AUTOPLAY_MODE_ADDR      	0x06D3
 #define R11_RESTART_FLAG_ADDR      	0x06D4
 #define BIG_SMALL_FLAG_ADDR      	0x06D5
+#define PLAY_DISK_MODE_ADDR         0x06D6
 
 
 #define MP4_FILENAME_SP_LIST1       0x3E00

@@ -8,6 +8,8 @@ WIFI_PAGE_S wifi_page;
 R11_STATE r11_state = {UINT16_PORT_MAX}; // 初始化R11状态
 NET_CONNECTED_STATE net_connected_state = NET_DISCONNECTED;
 
+
+
 void R11ConfigInitFormLib(void)
 {
     uint16_t read_param[30];
@@ -123,7 +125,7 @@ static void R11RestartInit()
 
 static void R11NoneTouchRecoveryPlayVideo()
 {
-	#define MAX_IDLE_TOUCH_TIME       60
+	#define MAX_IDLE_TOUCH_TIME       30
 	static uint16_t count = 0,prev_pic = 0;
 	uint16_t key_value,zero_value = 0,now_pic,recycle_set = 0x0102;
 	uint8_t touch_status[4];
@@ -134,12 +136,18 @@ static void R11NoneTouchRecoveryPlayVideo()
 		if(count >= MAX_IDLE_TOUCH_TIME * 10)
 		{
 			count = 0;
-			read_dgus_vp(sysDGUS_PIC_NOW,(uint8_t *)&now_pic,1);
-			if(now_pic != (uint16_t)page_st.fullvideo_page && now_pic != (uint16_t)page_st.video_page&& now_pic != STORAGE_DISCONN_PAGE)
+			if(first_in_flag == 0)
 			{
-				prev_pic = now_pic;
-				T5lSendUartDataToR11(cmdMP4_REPLAY,NULL);
-				SwitchPageById((uint16_t)page_st.video_page);
+				first_in_flag = 1;
+			}else
+			{
+				read_dgus_vp(sysDGUS_PIC_NOW,(uint8_t *)&now_pic,1);
+				if(now_pic != (uint16_t)page_st.fullvideo_page && now_pic != (uint16_t)page_st.video_page&& now_pic != STORAGE_DISCONN_PAGE)
+				{
+					prev_pic = now_pic;
+					T5lSendUartDataToR11(cmdMP4_REPLAY,NULL);
+					SwitchPageById((uint16_t)page_st.fullvideo_page);
+				}
 			}
 		}
 	}else{
@@ -162,6 +170,8 @@ static void R11NoneTouchRecoveryPlayVideo()
 	}else if(key_value == 0x0202)
 	{
 		T5lSendUartDataToR11(cmdMP4_PAUSE,NULL);
+		first_in_flag = 0;
+		video_init_process = VIDEO_PROCESS_VOLUME;
 		SwitchPageById(prev_pic);
 		write_dgus_vp(R11_SCAN_ADDRESS,(uint8_t *)&zero_value,1);
 	}
@@ -206,7 +216,7 @@ void R11AdvertiseTask(void)
         r11_state.restart_flag = 2;  /* 重置重启标志 */
     }else if(r11_state.restart_flag == 2)
 	{
-        R11VideoPlayerProcess();
+		R11VideoPlayerProcess();
 		R11ValueScanTask();
 		R11NoneTouchRecoveryPlayVideo();
 	}
