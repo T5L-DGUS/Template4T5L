@@ -24,6 +24,28 @@
  */
 extern volatile uint16_t SysTaskTimerTick;
 
+/**
+ * @brief 系统任务数组
+ * @details 存储所有已注册系统任务的数组，最大容量由sysMAX_TASK_NUM定义
+ */
+static SysTask SysTasks[sysMAX_TASK_NUM];
+
+/**
+ * @brief 页面状态数组
+ * @details 每个受监控页面使用独立状态，避免页面动作互相干扰。
+ */
+static PageState page_states[dgusMAX_MONITORED_PAGES] =
+{
+    { UINT16_PORT_MAX, UINT16_PORT_MAX },
+    { UINT16_PORT_MAX, UINT16_PORT_MAX }
+};
+
+/**
+ * @brief 当前已注册任务数量
+ * @details 记录系统中当前活跃任务的总数
+ */
+static uint8_t SysTaskCount = 0;
+
 
 void SysTaskAdd(uint8_t taskID, uint16_t taskInterval, void (*taskFunction)(void))
 {

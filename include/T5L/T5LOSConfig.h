@@ -230,7 +230,7 @@ extern uint32_t sysFCLK;
  * @brief UART通用帧缓冲区大小
  * @details 所有UART接口共用的数据帧缓冲区大小，单位为字节
  */
-#define uartUART_COMMON_FRAME_SIZE     4500
+#define uartUART_COMMON_FRAME_SIZE     2000
 
 /**
  * @brief Modbus协议支持使能标志
@@ -446,5 +446,7 @@ extern uint32_t sysFCLK;
 #endif /* spiSPI_ENABLED */
 
 #define canCAN_ENABLED                  0
+
+#define _4G_AIR780E_ENABLED             0
 
 #endif /* T5LOS_CONFIG_H */
