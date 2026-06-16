@@ -96,13 +96,6 @@ typedef struct TaskDefine
 } SysTask;
 
 /**
- * @brief 系统任务数组
- * @details 存储所有已注册系统任务的数组，最大容量由sysMAX_TASK_NUM定义
- */
-static SysTask SysTasks[sysMAX_TASK_NUM];
-
-
-/**
  * @brief 页面状态结构体
  * @details 用于维护每个页面的独立状态信息
  */
@@ -112,15 +105,6 @@ typedef struct {
 } PageState;
 
 #define dgusMAX_MONITORED_PAGES 2
-/* 将里面的数据全部初始化为UINT16_PORT_MAX */
-static PageState page_states[dgusMAX_MONITORED_PAGES] = UINT16_PORT_MAX;
-
-
-/**
- * @brief 当前已注册任务数量
- * @details 记录系统中当前活跃任务的总数
- */
-static uint8_t SysTaskCount = 0;
 
 
 /**

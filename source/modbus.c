@@ -92,6 +92,16 @@ void SendModbusGenericFrame(UART_TYPE *uart,
 {
     uint8_t modbus_send_frame[modbusMAX_FRAME_SIZE];
     uint16_t crc,i;
+    if((uart == NULL) || (modbus_slave_address > 0xFFU))
+    {
+        return;
+    }
+
+    if((frame != NULL) && (modbus_register_quantity > ((modbusMAX_FRAME_SIZE - 9U) / 2U)))
+    {
+        return;
+    }
+
     modbus_send_frame[0] = modbus_slave_address;
     modbus_send_frame[1] = modbus_command;
     modbus_send_frame[2] = (modbus_start_address >> 8) & 0xFF; 

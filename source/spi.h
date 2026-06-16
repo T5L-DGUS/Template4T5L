@@ -17,25 +17,25 @@
  * @brief SPI时钟引脚位操作定义
  * @details SCK时钟线的位级操作变量定义
  */
-#define     spiSCK              (spiGPIO_PORT^spiSCK_PIN)
+sbit spiSCK = spiGPIO_PORT^spiSCK_PIN;
 
 /**
  * @brief SPI主机输出引脚位操作定义
  * @details MOSI数据线的位级操作变量定义
  */
-#define     spiMOSI              (spiGPIO_PORT^spiMOSI_PIN)
+sbit spiMOSI = spiGPIO_PORT^spiMOSI_PIN;
 
 /**
  * @brief SPI主机输入引脚位操作定义
  * @details MISO数据线的位级操作变量定义
  */
-#define     spiMISO              (spiGPIO_PORT^spiMISO_PIN)
+sbit spiMISO = spiGPIO_PORT^spiMISO_PIN;
 
 /**
  * @brief SPI片选引脚位操作定义
  * @details CS片选信号的位级操作变量定义
  */
-#define     spiCS              (spiGPIO_PORT^spiCS_PIN)
+sbit spiCS = spiGPIO_PORT^spiCS_PIN;
 
 /* SPI时序配置 */
 /**

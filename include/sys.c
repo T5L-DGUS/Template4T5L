@@ -27,6 +27,17 @@ extern volatile uint16_t SysTaskTimerTick;
 
 void SysTaskAdd(uint8_t taskID, uint16_t taskInterval, void (*taskFunction)(void))
 {
+    uint8_t i;
+    for(i = 0; i < SysTaskCount; i++)
+    {
+        if(SysTasks[i].taskID == taskID)
+        {
+            SysTasks[i].taskInterval = taskInterval;
+            SysTasks[i].taskCounter = 0;
+            SysTasks[i].taskFunction = taskFunction;
+            return;
+        }
+    }
     if(SysTaskCount < sysMAX_TASK_NUM)
     {
         SysTasks[SysTaskCount].taskID = taskID;
@@ -238,7 +249,7 @@ static void InterruptInit(void)
 
 void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
 {
-	uint16_t OS_addr = 0;
+	uint32_t OS_addr = 0;
 	uint16_t OS_addr_offset = 0;
 	uint16_t OS_len = 0, OS_len_offset = 0;
 
@@ -394,6 +405,13 @@ void DgusAutoUpload()
 		uint16_t auto_load_vp = *((uint16_t *)(&auto_load_arr[1]));
 		uint16_t auto_load_len = auto_load_arr[3] * 2;
 		uint8_t auto_load_ret_arr[sysDGUS_AUTO_UPLOAD_LEN] = {0x5a, 0xa5, 0x06, 0x83, 0x00, 0x00, 0x01, 0x00, 0x00};
+        if(auto_load_len > (sysDGUS_AUTO_UPLOAD_LEN - 9U))
+        {
+            auto_load_arr[0] = 0x00;
+            auto_load_arr[1] = 0x00;
+            write_dgus_vp(sysDGUS_AUTO_UPLOAD_VP_ADDR, auto_load_arr, 1);
+            return;
+        }
 		auto_load_ret_arr[2] = 4 + auto_load_len; 
 		auto_load_ret_arr[4] = auto_load_arr[1];
 		auto_load_ret_arr[5] = auto_load_arr[2];  
@@ -429,6 +447,13 @@ void DgusAutoUpload()
 		uint16_t auto_load_vp = *((uint16_t *)(&auto_load_arr[1]));
 		uint16_t auto_load_len = auto_load_arr[3] * 2;
 		uint8_t auto_load_ret_arr[sysDGUS_AUTO_UPLOAD_LEN] = {0xAA,0x78, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00};
+        if(auto_load_len > (sysDGUS_AUTO_UPLOAD_LEN - 2U))
+        {
+            auto_load_arr[0] = 0x00;
+            auto_load_arr[1] = 0x00;
+            write_dgus_vp(sysDGUS_AUTO_UPLOAD_VP_ADDR, auto_load_arr, 1);
+            return;
+        }
   
 		read_dgus_vp(auto_load_vp, auto_load_ret_arr + 2, auto_load_len);
         if(auto_load_ret_arr[2] == 0xaa)
@@ -546,9 +571,8 @@ static void DgusPageAction(uint16_t target_page_id,
 void DgusPageScanTask(void)
 {
     /** 定义的页面切换数量不能超过dgusMAX_MONITORED_PAGES */
-    uint16_t page_state_location=0;
-    DgusPageAction(1,&page_states[++page_state_location],first_enter_action, repeated_enter_action, exit_action); 
-    DgusPageAction(0,&page_states[++page_state_location],first_enter_action, NULL, exit_action); 
+    DgusPageAction(1,&page_states[0],first_enter_action, repeated_enter_action, exit_action);
+    DgusPageAction(0,&page_states[1],first_enter_action, NULL, exit_action);
 }
 
 
@@ -714,24 +738,24 @@ static uint16_t AdcReadChannel(uint8_t channel,uint8_t clear_flag)
     }
     if(channel < sysDGUS_ADC_CHANNEL_COUNT + sysDGUS_ADC_CHANNEL0)
     {
-        read_dgus_vp(channel+sysDGUS_ADC_CHANNEL0, 
-            (uint8_t *)&adc_values[channel][adc_now_count[channel]%sysDGUS_ADC_AVERAGE_COUNT], 1);
-        adc_now_count[channel]++;
-        if(adc_now_count[channel]< sysDGUS_ADC_AVERAGE_COUNT)
+    read_dgus_vp(channel+sysDGUS_ADC_CHANNEL0,
+        (uint8_t *)&adc_values[channel][adc_now_count[channel]%sysDGUS_ADC_AVERAGE_COUNT], 1);
+    adc_now_count[channel]++;
+    if(adc_now_count[channel]< sysDGUS_ADC_AVERAGE_COUNT)
+    {
+        /* 计算当前count数量的平均数*/
+        for(i = 0; i < adc_now_count[channel]; i++)
         {
-            /* 计算当前count数量的平均数*/
-            for(i = 0; i < adc_now_count[channel]; i++)
-            {
-                adc_value += adc_values[channel][i];
-            }
-            adc_value /= adc_now_count[channel];
-        }else{
-            /* 计算sysDGUS_ADC_AVERAGE_COUNT数量的平均数 */
-            for(i = 0; i < sysDGUS_ADC_AVERAGE_COUNT; i++)
-            {
-                adc_value += adc_values[channel][i];
-            }
-            adc_value /= sysDGUS_ADC_AVERAGE_COUNT;
+            adc_value += adc_values[channel][i];
+        }
+        adc_value /= adc_now_count[channel];
+    }else{
+        /* 计算sysDGUS_ADC_AVERAGE_COUNT数量的平均数 */
+        for(i = 0; i < sysDGUS_ADC_AVERAGE_COUNT; i++)
+        {
+            adc_value += adc_values[channel][i];
+        }
+        adc_value /= sysDGUS_ADC_AVERAGE_COUNT;
         }
     }
     return adc_value;
@@ -758,11 +782,9 @@ void SysWriteSingleChart(uint8_t chart_id,uint8_t point_num,uint8_t *data_buf)
     write_param[4] = chart_id;
     write_param[5] = point_num; 
 
-    if(data_buf != NULL || point_num != 0)
+    if((data_buf != NULL) && (point_num != 0))
     {
-        write_param[6] = data_buf[0]; 
-        data_buf[1+point_num*2] = 0x00;
-        //写入data_buf长度的数据
+        /* 写入data_buf长度的数据 */
         write_dgus_vp(sysDGUS_CHART_VP_ADDRESS + 0x0003, &data_buf[1], point_num);
         write_dgus_vp(sysDGUS_CHART_VP_ADDRESS, write_param, 3);
     }

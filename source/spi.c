@@ -203,7 +203,7 @@ void SpiReceiveByte(uint8_t *data)
 }
 
 
-uint8_t SpiTransferByte(uint8_t send_data, uint8_t *receive_data)
+void SpiTransferByte(uint8_t send_data, uint8_t *receive_data)
 {
     uint8_t i;
     uint8_t bit_value;
@@ -279,7 +279,6 @@ uint8_t SpiTransferByte(uint8_t send_data, uint8_t *receive_data)
 void SpiSendBuffer(const uint8_t *data, uint16_t length)
 {
     uint16_t i;
-    uint8_t result;
     
     for(i = 0; i < length; i++)
     {
@@ -291,7 +290,6 @@ void SpiSendBuffer(const uint8_t *data, uint16_t length)
 void SpiReceiveBuffer(uint8_t *data, uint16_t length)
 {
     uint16_t i;
-    uint8_t result;
     
     for(i = 0; i < length; i++)
     {
@@ -303,7 +301,6 @@ void SpiReceiveBuffer(uint8_t *data, uint16_t length)
 void SpiTransferBuffer(const uint8_t *send_data, uint8_t *receive_data, uint16_t length)
 {
     uint16_t i;
-    uint8_t result;
     
     for(i = 0; i < length; i++)
     {

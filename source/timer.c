@@ -93,7 +93,7 @@ void Timer0Isr() interrupt 1
 {
     ET0 = 0;
     TH0 = timeT0_TICK >> 8;
-    TL0 = timeT0_TICK;
+    TL0 = timeT0_TICK & 0xFF;
 
 	#if uartUART2_ENABLED
 		if(Uart2.RxTimeout)
@@ -133,7 +133,7 @@ void Timer1Isr() interrupt 3
 {
     ET1 = 0;
     TH1 = timeT1_TICK >> 8;
-    TL1 = timeT1_TICK;
+    TL1 = timeT1_TICK & 0xFF;
 
     /* use timer1*/
     __NOP();

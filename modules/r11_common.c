@@ -70,7 +70,7 @@ uint16_t Icon_Overlay_SP_H[10];
 uint16_t Locate_arr[10]; 
 PAGE_S page_st;
 
-uint8_t mp4_name[5][MAX_MP3_NAME_LEN]=0;
+uint8_t mp4_name[5][MAX_MP3_NAME_LEN] = {0};
 uint16_t mp4_name_len[5];
 PLAYER_T r11_player;
 
@@ -400,7 +400,7 @@ static void R11PlayHighlightVideo(void)
 void R11VideoPlayerProcess(void)
 {
     static uint16_t search_retry_count = 10;
-    static uint16_t read_param[8] = 0;     /**@note 需要改为静态变量，因为会多次进入此函数 */
+    static uint16_t read_param[6] = {0};     /**@note 需要改为静态变量，因为会多次进入此函数 */
     uint16_t rotate_angle;
     uint8_t r11_send_buf[6];
 
@@ -795,7 +795,8 @@ void R11VideoValueHandle(uint16_t dgus_value)
  */
 static void R11WifiScanResultHandle(uint8_t *frame)
 {
-	uint16_t write_param[4],i,j,zero_arr[32] = 0;
+	uint16_t write_param[4],i,j;
+    uint16_t zero_arr[32] = {0};
 	if(frame[6] == 0x0a)
 	{
 		if(wifi_now_offset > 0)
@@ -910,7 +911,7 @@ static void R11ScanWifi(uint8_t scan_offset)
 
 void UartR11UserWifiProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
-    uint16_t write_param[2] = 0;
+    uint16_t write_param[2] = {0};
     if(frame[0] == 0xAA && frame[1] == 0x55)
     {
         if(len < 6 || len < ((frame[2]<<8|frame[3])+4))
@@ -952,7 +953,7 @@ void R11WifiValueHandle(uint16_t dgus_value)
 {
     uint8_t r11_send_buf[15];
     uint16_t read_param[20];
-    uint16_t write_zero_param[80]=0;
+    uint16_t write_zero_param[80] = {0};
     const uint16_t uint16_port_zero = 0;
     if(dgus_value == keyWIFI_LIST1 || dgus_value == keyWIFI_LIST2 || dgus_value == keyWIFI_LIST3 
         || dgus_value == keyWIFI_LIST4 || dgus_value == keyWIFI_LIST5)
