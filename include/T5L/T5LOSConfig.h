@@ -252,7 +252,7 @@ extern uint32_t sysFCLK;
      * @brief UART2发送和接收缓冲区大小
      */
     #define uartUART2_TXBUF_SIZE         256
-    #define uartUART2_RXBUF_SIZE         256
+    #define uartUART2_RXBUF_SIZE         2000
     
     /**
      * @brief UART2超时功能使能标志

@@ -31,10 +31,10 @@ void R11ConfigInitFormLib(void)
 		sysFCLK = 206438400;
 	}
 	/** 2.进行屏幕设置的初始化，包括分频系数，显示质量，截图张数 */
-    Icon_Overlay_SP_VP[0] = Icon_Overlay_SP_VP[2] = 0x04000;
-	Icon_Overlay_SP_VP[1] = Icon_Overlay_SP_VP[3] = 0x22000;
-    Icon_Overlay_SP_VP[4] = Icon_Overlay_SP_VP[5] = Icon_Overlay_SP_VP[6] = 0x3f000;
-	Icon_Overlay_SP_VP[7] = Icon_Overlay_SP_VP[8] = Icon_Overlay_SP_VP[9] = Icon_Overlay_SP_VP[10] = 0x3f000;
+    Icon_Overlay_SP_VP[0] = Icon_Overlay_SP_VP[2] = 0x10000;
+	Icon_Overlay_SP_VP[1] = Icon_Overlay_SP_VP[3] = 0x28000;
+    Icon_Overlay_SP_VP[4] = Icon_Overlay_SP_VP[5] = Icon_Overlay_SP_VP[6] = 0x40000;
+	Icon_Overlay_SP_VP[7] = Icon_Overlay_SP_VP[8] = Icon_Overlay_SP_VP[9] = Icon_Overlay_SP_VP[10] = 0x40000;
 
 
 	/* 3.针对主显示位置进行初始化 */
