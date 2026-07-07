@@ -565,7 +565,7 @@ uint8_t prvDwin8283CrcCheck(uint8_t* frame,uint16_t len,uint16_t *CrcFlag)
  */
 static void UartStandardDwin8283Protocal(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
-    uint16_t i=0,CrcFlag = 0,CrcResult = 0;
+    uint16_t i=0,CrcFlag = 0,CrcResult = 0,now_pic;
     uint8_t send_return_frame[256];
     if(frame[0] == 0x5a && frame[1] == 0xa5 && frame[3] == 0x82)
     {
@@ -585,7 +585,15 @@ static void UartStandardDwin8283Protocal(UART_TYPE *uart,uint8_t *frame, uint16_
         {
             return;
         }
-        write_dgus_vp((frame[4] << 8) | frame[5], &frame[6], (frame[2] - 3) >> 1);
+        /*如果当前在视频播放页面，并且命令为写入切页，则不执行*/
+        read_dgus_vp(sysDGUS_PIC_NOW,&now_pic,1);
+        if((now_pic == VIDEO_FULL_PIC||now_pic == VIDEO_HOTPLUG_PIC) && (frame[4] == 0x00 && frame[5] == 0x84 && frame[6] == 0x5a))
+        {
+            
+        }else
+        {
+            write_dgus_vp((frame[4] << 8) | frame[5], &frame[6], (frame[2] - 3) >> 1);
+        }
         #if uartUART_82CMD_RETURN
         i=0;
         send_return_frame[i++] = 0x5a;

@@ -125,7 +125,7 @@ static void R11RestartInit()
 
 static void R11NoneTouchRecoveryPlayVideo()
 {
-	#define MAX_IDLE_TOUCH_TIME       30
+	#define MAX_IDLE_TOUCH_TIME       60
 	static uint16_t count = 0,prev_pic = 0;
 	uint16_t key_value,zero_value = 0,now_pic,recycle_set = 0x0102;
 	uint8_t touch_status[4];

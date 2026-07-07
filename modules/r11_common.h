@@ -83,6 +83,9 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define MP3 1
 #define JPG 2
 
+#define VIDEO_FULL_PIC     19
+#define VIDEO_HOTPLUG_PIC   20
+
 #define MAX_MP3_NAME_LEN  		32
 #define MAX_VOLUME              40
 #define MAX_WIFI_NAME_LEN 		32
