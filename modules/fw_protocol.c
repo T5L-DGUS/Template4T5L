@@ -148,7 +148,6 @@ void FwProtocolFeed(uint8_t *bytes, uint16_t length)
 
 void FwUsbProtocol(UART_TYPE *uart, uint8_t *frame, uint16_t length)
 {
-    UartSendData(&Uart2, frame, length);
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
     if(uart != &Uart_R11 || length != 6 || frame[0] != 0xAA || frame[1] != 0x55 ||
        frame[2] != 0 || frame[3] != 2 || frame[4] != 0xFB) return;
