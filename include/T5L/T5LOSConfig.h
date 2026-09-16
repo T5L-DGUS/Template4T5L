@@ -447,4 +447,7 @@ extern uint32_t sysFCLK;
 
 #define canCAN_ENABLED                  0
 
+/*判断gui核忙不忙的代码，不用判忙时将其注释*/
+//#define Judge_GUI_BUSY
+
 #endif /* T5LOS_CONFIG_H */
