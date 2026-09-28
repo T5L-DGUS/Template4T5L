@@ -467,6 +467,26 @@
               <FilePath>..\source\TA_protocal.h</FilePath>
             </File>
             <File>
+              <FileName>ext_font_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\source\ext_font_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>ext_font_flash.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\source\ext_font_flash.h</FilePath>
+            </File>
+            <File>
+              <FileName>flash_dictionary.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\source\flash_dictionary.c</FilePath>
+            </File>
+            <File>
+              <FileName>flash_dictionary.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\source\flash_dictionary.h</FilePath>
+            </File>
+            <File>
               <FileName>multi_input.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\source\multi_input.c</FilePath>

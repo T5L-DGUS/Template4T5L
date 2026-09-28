@@ -11,6 +11,7 @@
  * 本机整数端序，本文件的所有 VP 读写均显式拆分或合并高、低字节。
  */
 #include "multi_input.h"
+#include "flash_dictionary.h"
 
 /* 原键盘保留的控制键事件。 */
 #define MULTI_INPUT_KEY_ESCAPE           0x00F0U
@@ -27,7 +28,6 @@
 #define MULTI_INPUT_CANDIDATE_KEY_BASE   0xF101U
 #define MULTI_INPUT_EXTENDED_KEY_BASE    0xF200U
 #define MULTI_INPUT_KEY_LANGUAGE_SWITCH  0xF300U
-#define MULTI_INPUT_NO_CANDIDATE         0xFFFFU
 
 /* 候选词输出的三种大小写形式。 */
 #define MULTI_INPUT_CASE_LOWER           0U
@@ -40,7 +40,13 @@ typedef struct
     MultiInputLanguagePack code *language;
     MultiInputLanguagePack code *secondary_language;
     uint16_t buffer[MULTI_INPUT_MAX_LENGTH + 1U];
-    uint16_t candidate_offsets[MULTI_INPUT_CANDIDATE_COUNT];
+    uint16_t candidate_words[MULTI_INPUT_CANDIDATE_COUNT][MULTI_INPUT_CANDIDATE_MAX_LENGTH + 1U];
+    uint8_t dictionary_prefix[MULTI_INPUT_CANDIDATE_MAX_LENGTH];
+    uint32_t candidate_page;
+    uint32_t candidate_total;
+    uint8_t candidate_count;
+    uint8_t dictionary_prefix_length;
+    uint8_t dictionary_result_state;
     uint8_t vp_bytes[MULTI_INPUT_PREVIEW_WORD_COUNT * 2U];
     uint16_t target_vp;
     uint16_t source_page;
@@ -131,6 +137,22 @@ static uint8_t MultiInputLanguageIsValid(MultiInputLanguagePack code *language)
     if(language->dictionary_word_count == 0U)
     {
         return 1U;
+    }
+    if((language->dictionary_min_prefix == 0U) ||
+       (language->dictionary_min_prefix > MULTI_INPUT_CANDIDATE_MAX_LENGTH))
+    {
+        return 0U;
+    }
+    if(language->dictionary_backend == MULTI_INPUT_DICTIONARY_FLASH)
+    {
+        return (uint8_t)((language->dictionary_max_word_length == 15U) &&
+                         (language->extended_character_count == 17U) &&
+                         (language->dictionary_word_count == 10000UL));
+    }
+    if((language->dictionary_backend != MULTI_INPUT_DICTIONARY_CODE) ||
+       (language->dictionary_word_count > 65535UL))
+    {
+        return 0U;
     }
     if((language->dictionary_pool == 0) ||
        (language->dictionary_offsets == 0))
@@ -331,13 +353,13 @@ static void MultiInputWriteStatus(void)
     write_dgus_vp(MULTI_INPUT_STATUS_VP, MultiInputContext.vp_bytes, 16U);
 }
 
-/** 计算词池中零结尾候选词的长度，并强制受 15 字符上限约束。 */
-static uint8_t MultiInputDictionaryWordLength(uint16_t offset)
+/** 两种后端都先将当前页复制到候选缓存，提交不再依赖异步 Flash。 */
+static uint8_t MultiInputDictionaryWordLength(uint8_t slot)
 {
     uint8_t length;
     length = 0U;
     while((length < MultiInputContext.language->dictionary_max_word_length) &&
-          (MultiInputContext.language->dictionary_pool[offset + length] != 0U))
+          (MultiInputContext.candidate_words[slot][length] != 0U))
     {
         length++;
     }
@@ -348,20 +370,18 @@ static uint8_t MultiInputDictionaryWordLength(uint16_t offset)
 static void MultiInputWriteCandidate(uint8_t slot)
 {
     uint32_t vp;
-    uint16_t offset;
     uint16_t value;
     uint8_t i;
 
     /* 四个候选 VP 的固定步长为 0x10 words。 */
     vp = (uint32_t)MULTI_INPUT_CANDIDATE1_VP + ((uint32_t)slot * 0x10UL);
-    offset = MultiInputContext.candidate_offsets[slot];
     MultiInputZeroVpBytes(32U);
 
-    if(offset != MULTI_INPUT_NO_CANDIDATE)
+    if(slot < MultiInputContext.candidate_count)
     {
         for(i = 0U; i < MultiInputContext.language->dictionary_max_word_length; i++)
         {
-            value = MultiInputContext.language->dictionary_pool[offset + i];
+            value = MultiInputContext.candidate_words[slot][i];
             if(value == 0U)
             {
                 break;
@@ -437,63 +457,236 @@ static uint8_t MultiInputDeterminePrefixCase(uint8_t start, uint8_t prefix_lengt
     return MULTI_INPUT_CASE_LOWER;
 }
 
-/**
- * 重建四个联想候选。
- *
- * 只有光标左侧至少两个连续字母时才检索；词典已按词频排序，因此线性扫描
- * 收集到的前四项天然保持频率优先级。若条件不满足，四个候选 VP 全部清空。
- */
+/** 清除当前页缓存，异步检索期间旧候选不再允许提交。 */
+static void MultiInputClearCandidates(void)
+{
+    uint8_t i;
+    uint8_t j;
+    MultiInputContext.candidate_count = 0U;
+    MultiInputContext.candidate_total = 0UL;
+    MultiInputContext.candidate_page = 0UL;
+    for(i = 0U; i < MULTI_INPUT_CANDIDATE_COUNT; i++)
+    {
+        for(j = 0U; j <= MULTI_INPUT_CANDIDATE_MAX_LENGTH; j++)
+        {
+            MultiInputContext.candidate_words[i][j] = 0U;
+        }
+    }
+}
+
+static uint8_t MultiInputAppendPageNumber(uint8_t position, uint32_t number)
+{
+    uint8_t digits[10];
+    uint8_t count;
+    count = 0U;
+    do
+    {
+        digits[count++] = (uint8_t)('0' + number % 10UL);
+        number /= 10UL;
+    } while(number && count < 10U);
+    while(count)
+    {
+        position = MultiInputAppendStatusCharacter(position, digits[--count]);
+    }
+    return position;
+}
+
+static void MultiInputWritePage(void)
+{
+    uint8_t position;
+    uint32_t pages;
+    MultiInputZeroVpBytes(32U);
+    position = 0U;
+    if(MultiInputContext.language->dictionary_backend == MULTI_INPUT_DICTIONARY_FLASH)
+    {
+        if(MultiInputContext.dictionary_result_state == FLASH_DICTIONARY_ERROR)
+        {
+            position = MultiInputAppendStatusCharacter(position, '-');
+            position = MultiInputAppendStatusCharacter(position, '-');
+            position = MultiInputAppendStatusCharacter(position, '/');
+            position = MultiInputAppendStatusCharacter(position, '-');
+            MultiInputAppendStatusCharacter(position, '-');
+        }
+        else if(MultiInputContext.dictionary_result_state == FLASH_DICTIONARY_BUSY)
+        {
+            position = MultiInputAppendStatusCharacter(position, '.');
+            position = MultiInputAppendStatusCharacter(position, '.');
+            MultiInputAppendStatusCharacter(position, '.');
+        }
+        else
+        {
+            pages = (MultiInputContext.candidate_total + 3UL) / 4UL;
+            position = MultiInputAppendPageNumber(position,
+                pages ? MultiInputContext.candidate_page + 1UL : 0UL);
+            position = MultiInputAppendStatusCharacter(position, '/');
+            MultiInputAppendPageNumber(position, pages);
+        }
+    }
+    write_dgus_vp(MULTI_INPUT_PAGE_VP, MultiInputContext.vp_bytes, 16U);
+}
+
+/** 仅在异步状态变化时刷新 VP；页面内容在 READY 后一次性发布。 */
+static void MultiInputPollFlashCandidates(void)
+{
+    FlashDictionaryResult xdata *result;
+    uint8_t slot;
+    uint8_t i;
+    uint8_t value;
+    if(!MultiInputContext.active || MultiInputContext.language->dictionary_word_count == 0UL ||
+       MultiInputContext.language->dictionary_backend != MULTI_INPUT_DICTIONARY_FLASH)
+    {
+        return;
+    }
+    result = FlashDictionaryGetResult();
+    if(result->state == MultiInputContext.dictionary_result_state)
+    {
+        return;
+    }
+    MultiInputContext.dictionary_result_state = result->state;
+    MultiInputClearCandidates();
+    if(result->state == FLASH_DICTIONARY_READY)
+    {
+        MultiInputContext.candidate_count = result->count;
+        MultiInputContext.candidate_total = result->total;
+        MultiInputContext.candidate_page = result->page;
+        for(slot = 0U; slot < result->count; slot++)
+        {
+            for(i = 0U; i < MULTI_INPUT_CANDIDATE_MAX_LENGTH; i++)
+            {
+                value = result->words[slot][i];
+                if(value == 0U)
+                {
+                    break;
+                }
+                if(value <= 26U)
+                {
+                    MultiInputContext.candidate_words[slot][i] = (uint16_t)('a' + value - 1U);
+                }
+                else
+                {
+                    MultiInputContext.candidate_words[slot][i] =
+                        MultiInputContext.language->extended_characters[value - 27U];
+                }
+            }
+        }
+    }
+    for(slot = 0U; slot < MULTI_INPUT_CANDIDATE_COUNT; slot++)
+    {
+        MultiInputWriteCandidate(slot);
+    }
+    MultiInputWritePage();
+}
+
+static void MultiInputRequestFlashPage(uint32_t page)
+{
+    FlashDictionaryQuery(MultiInputContext.dictionary_prefix,
+                         MultiInputContext.dictionary_prefix_length, page);
+    MultiInputContext.dictionary_result_state = 0xFFU;
+    MultiInputPollFlashCandidates();
+}
+
+/** 根据语言后端重建候选；CODE 保留原有前四项，FLASH 可访问全部匹配。 */
 static void MultiInputUpdateCandidates(void)
 {
-    uint16_t dictionary_index;
+    uint32_t dictionary_index;
     uint16_t offset;
+    uint16_t value;
     uint8_t start;
     uint8_t end;
     uint8_t prefix_length;
     uint8_t found;
     uint8_t i;
+    uint8_t j;
+    uint8_t encoded;
 
-    for(i = 0U; i < MULTI_INPUT_CANDIDATE_COUNT; i++)
+    MultiInputClearCandidates();
+    if(MultiInputContext.language->dictionary_word_count == 0UL)
     {
-        MultiInputContext.candidate_offsets[i] = MULTI_INPUT_NO_CANDIDATE;
+        MultiInputContext.dictionary_prefix_length = 0U;
+        MultiInputContext.dictionary_result_state = FLASH_DICTIONARY_EMPTY;
+        FlashDictionaryQuery(MultiInputContext.dictionary_prefix, 0U, 0UL);
+        for(i = 0U; i < MULTI_INPUT_CANDIDATE_COUNT; i++)
+        {
+            MultiInputWriteCandidate(i);
+        }
+        MultiInputWritePage();
+        return;
     }
-
     MultiInputFindWordBounds(&start, &end);
     prefix_length = MultiInputContext.cursor - start;
-    if(prefix_length >= 2U)
+    if(prefix_length > MULTI_INPUT_CANDIDATE_MAX_LENGTH ||
+       prefix_length < MultiInputContext.language->dictionary_min_prefix)
+    {
+        prefix_length = 0U;
+    }
+    if(prefix_length)
+    {
+        MultiInputContext.candidate_case = MultiInputDeterminePrefixCase(start, prefix_length);
+    }
+    if(MultiInputContext.language->dictionary_backend == MULTI_INPUT_DICTIONARY_FLASH)
     {
         for(i = 0U; i < prefix_length; i++)
         {
-            if(!MultiInputIsLetter(MultiInputContext.buffer[start + i]))
+            value = MultiInputToLower(MultiInputContext.buffer[start + i]);
+            encoded = 0U;
+            if(value >= 'a' && value <= 'z')
+            {
+                encoded = (uint8_t)(value - 'a' + 1U);
+            }
+            else
+            {
+                for(j = 0U; j < MultiInputContext.language->extended_character_count; j++)
+                {
+                    if(value == MultiInputContext.language->extended_characters[j])
+                    {
+                        encoded = 27U + j;
+                        break;
+                    }
+                }
+            }
+            if(encoded == 0U)
             {
                 prefix_length = 0U;
                 break;
             }
+            MultiInputContext.dictionary_prefix[i] = encoded;
         }
+        MultiInputContext.dictionary_prefix_length = prefix_length;
+        MultiInputRequestFlashPage(0UL);
+        return;
     }
 
-    if(prefix_length >= 2U)
+    FlashDictionaryQuery(MultiInputContext.dictionary_prefix, 0U, 0UL);
+    found = 0U;
+    if(prefix_length)
     {
-        MultiInputContext.candidate_case = MultiInputDeterminePrefixCase(start, prefix_length);
-        found = 0U;
-        for(dictionary_index = 0U;
-            (dictionary_index < MultiInputContext.language->dictionary_word_count) &&
-            (found < MULTI_INPUT_CANDIDATE_COUNT);
-            dictionary_index++)
+        for(dictionary_index = 0UL;
+            dictionary_index < MultiInputContext.language->dictionary_word_count &&
+            found < MULTI_INPUT_CANDIDATE_COUNT; dictionary_index++)
         {
-            offset = MultiInputContext.language->dictionary_offsets[dictionary_index];
+            offset = MultiInputContext.language->dictionary_offsets[(uint16_t)dictionary_index];
             if(MultiInputPrefixMatches(offset, start, prefix_length))
             {
-                MultiInputContext.candidate_offsets[found] = offset;
+                for(i = 0U; i < MultiInputContext.language->dictionary_max_word_length; i++)
+                {
+                    value = MultiInputContext.language->dictionary_pool[offset + i];
+                    MultiInputContext.candidate_words[found][i] = value;
+                    if(value == 0U)
+                    {
+                        break;
+                    }
+                }
                 found++;
             }
         }
     }
-
+    MultiInputContext.candidate_count = found;
+    MultiInputContext.candidate_total = found;
     for(i = 0U; i < MULTI_INPUT_CANDIDATE_COUNT; i++)
     {
         MultiInputWriteCandidate(i);
     }
+    MultiInputWritePage();
 }
 
 /** 在正文或光标状态变化后同步预览、状态栏和全部候选词。 */
@@ -504,7 +697,7 @@ static void MultiInputRefresh(void)
     MultiInputUpdateCandidates();
 }
 
-/** 在光标处插入一个 UTF-16 字符；达到 63 字符时置 FULL 并拒绝插入。 */
+/** 在光标处插入一个 UTF-16 字符；达到本次字段容量时置 FULL 并拒绝插入。 */
 static uint8_t MultiInputInsertCharacter(uint16_t value)
 {
     uint8_t i;
@@ -570,7 +763,6 @@ static void MultiInputDelete(void)
  */
 static void MultiInputSelectCandidate(uint8_t slot)
 {
-    uint16_t offset;
     uint16_t value;
     uint8_t start;
     uint8_t end;
@@ -580,15 +772,14 @@ static void MultiInputSelectCandidate(uint8_t slot)
     uint8_t i;
     uint8_t old_length;
 
-    offset = MultiInputContext.candidate_offsets[slot];
-    if(offset == MULTI_INPUT_NO_CANDIDATE)
+    if(slot >= MultiInputContext.candidate_count)
     {
         return;
     }
 
     MultiInputFindWordBounds(&start, &end);
     old_word_length = end - start;
-    candidate_length = MultiInputDictionaryWordLength(offset);
+    candidate_length = MultiInputDictionaryWordLength(slot);
     old_length = MultiInputContext.length;
 
     if(candidate_length > old_word_length)
@@ -623,7 +814,7 @@ static void MultiInputSelectCandidate(uint8_t slot)
     /* 候选显示形式沿用用户前缀的大小写风格。 */
     for(i = 0U; i < candidate_length; i++)
     {
-        value = MultiInputContext.language->dictionary_pool[offset + i];
+        value = MultiInputContext.candidate_words[slot][i];
         MultiInputContext.buffer[start + i] =
             MultiInputApplyCase(value, MultiInputContext.candidate_case, i);
     }
@@ -650,6 +841,8 @@ static void MultiInputFinish(uint8_t commit)
     }
 
     MultiInputContext.active = 0U;
+    FlashDictionaryQuery(MultiInputContext.dictionary_prefix, 0U, 0UL);
+    MultiInputClearVp(MULTI_INPUT_PAGE_VP, 16U);
     MultiInputClearVp(MULTI_INPUT_CANDIDATE1_VP, 16U);
     MultiInputClearVp(MULTI_INPUT_CANDIDATE2_VP, 16U);
     MultiInputClearVp(MULTI_INPUT_CANDIDATE3_VP, 16U);
@@ -753,13 +946,34 @@ static void MultiInputHandleKey(uint16_t key)
         return;
     }
 
+    if((key == MULTI_INPUT_KEY_PREVIOUS_PAGE) || (key == MULTI_INPUT_KEY_NEXT_PAGE))
+    {
+        if(MultiInputContext.language->dictionary_backend == MULTI_INPUT_DICTIONARY_FLASH &&
+           MultiInputContext.dictionary_result_state == FLASH_DICTIONARY_READY)
+        {
+            if(key == MULTI_INPUT_KEY_PREVIOUS_PAGE && MultiInputContext.candidate_page > 0UL)
+            {
+                MultiInputRequestFlashPage(MultiInputContext.candidate_page - 1UL);
+            }
+            else if(key == MULTI_INPUT_KEY_NEXT_PAGE &&
+                    (MultiInputContext.candidate_page + 1UL) * 4UL < MultiInputContext.candidate_total)
+            {
+                MultiInputRequestFlashPage(MultiInputContext.candidate_page + 1UL);
+            }
+        }
+        return;
+    }
+
     if((key >= MULTI_INPUT_CANDIDATE_KEY_BASE) &&
        (key < MULTI_INPUT_CANDIDATE_KEY_BASE + MULTI_INPUT_CANDIDATE_COUNT))
     {
         /* 0xF101..0xF104 映射到候选槽 0..3。 */
         slot = (uint8_t)(key - MULTI_INPUT_CANDIDATE_KEY_BASE);
-        MultiInputSelectCandidate(slot);
-        MultiInputRefresh();
+        if(slot < MultiInputContext.candidate_count)
+        {
+            MultiInputSelectCandidate(slot);
+            MultiInputRefresh();
+        }
         return;
     }
 
@@ -826,13 +1040,11 @@ static void MultiInputHandleKey(uint16_t key)
 /**
  * 初始化模块及其 DGUS VP 协议区。
  *
- * 除清空内部状态外，也会清除保留组合区 0x0720、候选、状态和预览，避免
+ * 除清空内部状态外，也会清除页码区 0x0720、候选、状态和预览，避免
  * 设备复位后显示 RAM 中残留上一次输入会话的数据。
  */
 uint8_t MultiInputInit(MultiInputLanguagePack code *language)
 {
-    uint8_t i;
-
     if(!MultiInputLanguageIsValid(language))
     {
         return 0U;
@@ -849,10 +1061,10 @@ uint8_t MultiInputInit(MultiInputLanguagePack code *language)
     MultiInputContext.full = 0U;
     MultiInputContext.candidate_case = MULTI_INPUT_CASE_LOWER;
     MultiInputContext.buffer[0] = 0U;
-    for(i = 0U; i < MULTI_INPUT_CANDIDATE_COUNT; i++)
-    {
-        MultiInputContext.candidate_offsets[i] = MULTI_INPUT_NO_CANDIDATE;
-    }
+    MultiInputClearCandidates();
+    MultiInputContext.dictionary_prefix_length = 0U;
+    MultiInputContext.dictionary_result_state = FLASH_DICTIONARY_EMPTY;
+    FlashDictionaryInit();
 
     /* 事件 VP 由 OS 消费后清零；初始化时先建立相同的空闲状态。 */
     MultiInputWriteWord(MULTI_INPUT_KEY_VP, 0U);
@@ -923,6 +1135,7 @@ void MultiInputTask(void)
         }
     }
 
+    MultiInputPollFlashCandidates();
     key = MultiInputReadWord(MULTI_INPUT_KEY_VP);
     if(key != 0U)
     {
@@ -936,3 +1149,9 @@ void MultiInputTask(void)
 }
 
 
+
+/** 词库 I/O 与 CRC 独立推进，20 ms 按键任务只发布完整结果。 */
+void MultiInputDictionaryTask(void)
+{
+    FlashDictionaryTask();
+}

@@ -22,6 +22,9 @@ void main(void)
         SysTaskAdd(MULTI_INPUT_TASK_ID,
                    MULTI_INPUT_TASK_INTERVAL,
                    MultiInputTask);
+        SysTaskAdd(MULTI_INPUT_DICTIONARY_TASK_ID,
+                   MULTI_INPUT_DICTIONARY_INTERVAL,
+                   MultiInputDictionaryTask);
     }
 
     SysTaskAdd(2U, UART_TASK_INTERVAL, UartProtocalHandleTask);
