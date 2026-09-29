@@ -163,6 +163,14 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define keyMP4_CLEAR_PAGE           0x00ff
 #define keyMP4_NEXTFILE            	0x0001
 #define keyMP4_PREVFILE            	0x0002
+#define keyMP4_PREVIOUS_VIDEO       0x0039
+#define keyMP4_NEXT_VIDEO           0x003A
+#define keyMP4_TOGGLE_PAUSE         0x003B
+#define VIDEO_UI_STATUS_ADDR       0x06DB
+#define VIDEO_UI_COUNT_ADDR        0x06DC
+#define VIDEO_UI_BUTTON_ADDR       0x06DD
+void R11VideoUiTask(void);
+void R11VideoUiReset(void);
 
 #define keyMP4_PLAY_BY_NUM          0x0A00
 

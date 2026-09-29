@@ -18,6 +18,7 @@ function run(command, args) {
   if (result.status !== 0) {
     throw new Error(`${command} failed (exit ${result.status}):\n${result.stdout}${result.stderr}`);
   }
+  if(result.stdout) process.stdout.write(result.stdout);
 }
 try {
   const objects = ['tests/fw_protocol_test.c', 'modules/fw_protocol.c'].map((source, index) => {
@@ -32,7 +33,10 @@ try {
   run(linker, [...objects, '-o', output]);
   // LLVM's interpreter also works when the installed compiler only targets an MCU.
   run(interpreter, ['--force-interpreter=true', output]);
-  console.log('FW protocol: 11 scenarios passed; production C compiled with warnings treated as errors.');
+  const video = join(temporary, 'video-tests.bc');
+  run(compiler, ['-std=c99','-O0','-Wall','-Wextra','-Werror','-emit-llvm','-c','tests/r11_video_test.c','-o',video]);
+  run(interpreter, ['--force-interpreter=true',video]);
+  console.log('FW protocol: production C compiled with warnings treated as errors.');
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

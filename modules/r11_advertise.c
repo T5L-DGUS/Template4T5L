@@ -18,6 +18,14 @@ void R11ConfigInitFormLib(void)
     	/** 1.进行分辨率的初始化，针对2k分辨率需要修改主频 */
 	read_dgus_vp(PIXELS_SET_ADDR,(uint8_t*)&read_param[0],1);
 	memcpy(&screen_opt, &read_param[0], 2);
+	/* This project is 1024x600. Old persistent R11 settings must not
+	 * select the 2K clock or unrelated pages on a replacement panel. */
+	screen_opt.screen_ratio = 1;
+	write_dgus_vp(PIXELS_SET_ADDR,(uint8_t*)&screen_opt.screen_ratio,1);
+	read_dgus_vp(FCLK_DIV_ADDR,(uint8_t*)&read_param[0],2);
+	if(read_param[0]<1 || read_param[0]>16) read_param[0]=2;
+	if(read_param[1]<1 || read_param[1]>100) read_param[1]=90;
+	write_dgus_vp(FCLK_DIV_ADDR,(uint8_t*)&read_param[0],2);
 	if(screen_opt.screen_ratio == 0)  //19201080
 	{
 		sys_2k_ratio = 1;
@@ -64,6 +72,16 @@ void R11ConfigInitFormLib(void)
 	read_dgus_vp(VIDEO_FULL_ADDR,(uint8_t*)&read_param[0],1);
 	page_st.fullvideo_flag = read_param[0] >> 8;
 	page_st.fullvideo_page = read_param[0] & 0xff;
+	mainview.video_high=992; mainview.video_weight=448;
+	mainview.video_x_point=16; mainview.video_y_point=64;
+	write_dgus_vp(VIDEO_HIGH_ADDR,(uint8_t*)&mainview,4);
+	memset(&page_st,0,sizeof(page_st));
+	wifi_page.scan_flag=wifi_page.detail_flag=wifi_page.tr_scan_flag=0;
+	wifi_page.tr_detail_flag=wifi_page.comic_flag=wifi_page.store_flag=wifi_page.start_flag=0;
+	page_st.video_flag=page_st.fullvideo_flag=0x5a;
+	page_st.video_page=120; page_st.fullvideo_page=121;
+	read_param[0]=0x5a78; write_dgus_vp(VIDEO_SCREEN_ADDR,(uint8_t*)&read_param[0],1);
+	read_param[0]=0x5a79; write_dgus_vp(VIDEO_FULL_ADDR,(uint8_t*)&read_param[0],1);
 }
 
 
@@ -74,16 +92,10 @@ static void R11PageInitChange()
 {
 	uint16_t now_pic;
     read_dgus_vp(sysDGUS_PIC_NOW, (uint8_t *)&now_pic, 1);
-    if(now_pic == (uint16_t)page_st.detail_page)
-	{
-		R11ChangePictureLocate(mainview.detail_x_point,mainview.detail_y_point,mainview.detail_high,mainview.detail_weight,0x02);
-	}else if(now_pic == (uint16_t)page_st.main_page)
-	{
-		R11ChangePictureLocate(mainview.main_x_point,mainview.main_y_point,mainview.main_high,mainview.main_weight,0x02);
-	}else
-	{
-		R11ChangePictureLocate(mainview.main_x_point,mainview.main_y_point,mainview.main_high,mainview.main_weight,0x02);
-	}
+	if(now_pic==121) R11ChangePictureLocate(0,0,1024,600,1);
+	else if(now_pic==120) R11ChangePictureLocate(16,64,992,448,0);
+	else if(now_pic==9) R11ChangePictureLocate(16,116,562,434,0);
+	else R11ChangePictureLocate(1024,600,1,1,0);
 }
 
 
@@ -155,19 +167,22 @@ void R11AdvertiseTask(void)
     if(r11_state.restart_flag == 1)
     {
         R11RestartInit();
+		R11VideoUiReset();
 		video_init_process = VIDEO_PROCESS_UNINIT;
         r11_state.restart_flag = 2;  /* 重置重启标志 */
     }else if(r11_state.restart_flag == 2)
 	{
         R11VideoPlayerProcess();
 		R11ValueScanTask();
+		R11VideoUiTask();
 	}
 }
 
 
 void UartR11UserAdvertiseProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
-	uint16_t now_pic,crc16;
+	uint16_t now_pic;
+    if(uart!=&Uart_R11 || len<9) return;
     if(frame[0] == 0xAA && frame[1] == 0x55 && frame[4] == 0x82 && uart == &Uart_R11)
     {
         if(len < 6 || len < ((frame[2]<<8|frame[3])+4))
@@ -179,15 +194,17 @@ void UartR11UserAdvertiseProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
         {
             return;
         }else{
-            len -= 2;
+			len -= 2;
         }
+		if(len<7) return;
 		
         if(frame[5] == 0x04 && frame[6] == 0x82)
         {
             r11_state.restart_flag = 1;  /* 设置重启标志 */
 			write_dgus_vp(CPU_INFO_ADDR,(uint8_t*)&frame[7],(len-7)>>1);
-        }else if(frame[5] == 0x04 && frame[6] == 0xa2)
+		}else if(frame[5] == 0x04 && frame[6] == 0xa2)
 		{
+			if(len<9) return;
 			/** 
 			 * 写入网络状态信息 
 			 * 0x01未连接，0x02已连接

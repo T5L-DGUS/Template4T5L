@@ -4,4 +4,22 @@
 /project/Objects
 /project/1.bat
 /project/T5L51.uvgui.*
-/project/build*
+/tests
+/tools
+/tests
+
+# Local generation scripts and test harnesses
+/scripts/
+
+# Local build logs, backups, and GUI verification artifacts
+/project/build-fw*.log
+/resources/gui-backup/
+/resources/gui/verification.json
+/resources/gui/editor-page11-*.jpg
+/resources/gui/icl-viewer.jpg
+/resources/gui/normal-*.png
+/resources/gui/pressed-*.png
+
+
+/resources
+/docs/*.md

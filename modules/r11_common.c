@@ -16,6 +16,7 @@
 #include "sys.h"
 #include "T5LOSConfig.h"
 #include "uart.h"
+#include "timer.h"
 #include <string.h>
 
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
@@ -162,15 +163,9 @@ void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
     switch (cmd)
     {
         case cmdMP4_UPDATEFILE: 
-            /*在更新视频时,将当前播放的标白，初始化当前的页面和总量*/
-            if(r11_player.now_play_serial != 0)
-            {
-                write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_white,1);
-                r11_player.now_play_page = 1;
-                r11_player.now_play_serial = 0;
-                r11_player.total_serial = 0;
-            }
-            /*不需要break*/
+            /* A list query must not overwrite actual playback identity. */
+            r11_player.now_play_page = 1;
+            /* Shared two-byte payload. */
         case cmdMP4_ROTATE_ANGLE: 
         case cmdMP4_LOOP_MODE_SET:
             r11_buf[2] = 0x00;
@@ -343,7 +338,12 @@ void R11DebugValueHandle(uint16_t dgus_value)
 
 void R11ClearPicture(uint8_t clear_type)
 {
-    uint16_t write_param[2] = {0x5b5b,0x5b5b},i;
+    uint16_t write_param[2] = {0x5b5b,0x5b5b};
+    #if sysBEAUTY_MODE_ENABLED
+    uint16_t i;
+    #else
+    (void)clear_type;
+    #endif
 
     write_dgus_vp(Icon_Overlay_SP_VP[0],(uint8_t*)write_param,2);
     write_dgus_vp(Icon_Overlay_SP_VP[1],(uint8_t*)write_param,2);
@@ -361,39 +361,6 @@ void R11ClearPicture(uint8_t clear_type)
     #endif /* sysBEAUTY_MODE_ENABLED */
 }
 
-
-static void R11PlayHighlightVideo(void)
-{
-    /**
-     * 
-     */
-    uint8_t r11_send_buf[6],i;
-    /*全部清除显示*/
-    for(i=0;i<5;i++)
-    {
-        write_dgus_vp(MP4_FILENAME_SP_LIST1 + i * 0x20 + 0x03,(uint8_t*)&color_white,1);
-    }
-    if(r11_player.now_play_serial == 0)
-    {
-        /*循环到第一个视频了*/
-        r11_player.now_play_page = 1;
-        r11_send_buf[0] = r11_player.store_type;
-        r11_send_buf[1] = r11_player.Document_type = MP4;
-        T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
-    }
-    if( r11_player.now_play_serial >= (r11_player.now_play_page-1) * 5 && r11_player.now_play_serial < r11_player.now_play_page * 5 && r11_player.now_play_serial < r11_player.total_serial)
-    {
-        /*高亮显示当前*/
-        write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_red,1);
-    }else if(r11_player.now_play_serial >= r11_player.now_play_page * 5 && r11_player.now_play_serial < (r11_player.now_play_page+1) * 5 && r11_player.now_play_serial < r11_player.total_serial)
-    {
-        /* 翻页显示*/
-        r11_send_buf[0] = 0;
-        T5lSendUartDataToR11(cmdMP4_NEXTFILE, r11_send_buf);
-        r11_player.now_play_page++;
-        write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_red,1);
-    }
-}
 
 void R11VideoPlayerProcess(void)
 {
@@ -427,6 +394,10 @@ void R11VideoPlayerProcess(void)
         video_init_process = VIDEO_PROCESS_SEARCH_LOOP;
     }else if(video_init_process == VIDEO_PROCESS_SEARCH_LOOP)
     {
+        #if sysADVERTISE_MODE_ENABLED
+        /* The UI owns page changes; R11 keeps its existing playlist policy. */
+        video_init_process = VIDEO_PROCESS_COMPLETE;
+        #else
         /** 2.检查循环播放设置,如果开启循环，则认为已经开始自动播放，0xxx00为不循环，0xxx01循环当前，0x0002循环云端的视频发给r11不更新规则，0x0102循环所有并且发给r11更新规则 */
         if((read_param[2]&0x00ff) != 0x0000)
         {
@@ -435,6 +406,7 @@ void R11VideoPlayerProcess(void)
         {
             video_init_process = VIDEO_PROCESS_COMPLETE;
         }
+        #endif
     }else if(video_init_process == VIDEO_PROCESS_SIZE)
     {
         /** 3.设置视频显示初始大小 */
@@ -534,10 +506,13 @@ void R11VideoPlayerProcess(void)
 }
 
 
+#include "r11_video_ui.inc"
+
 void R11VideoValueHandle(uint16_t dgus_value)
 {
     #define MAX_MP4_NUMBER        256
-    uint8_t r11_send_buf[6],i;
+    uint8_t r11_send_buf[6];
+    if(VideoUiKey(dgus_value)) return;
 
     if(dgus_value >= keyMP4_PLAY_BY_NUM && dgus_value < keyMP4_PLAY_BY_NUM + MAX_MP4_NUMBER)
     {
@@ -909,6 +884,7 @@ static void R11ScanWifi(uint8_t scan_offset)
 void UartR11UserWifiProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
     uint16_t write_param[2] = 0;
+    if(uart!=&Uart_R11 || len<6) return;
     if(frame[0] == 0xAA && frame[1] == 0x55)
     {
         if(len < 6 || len < ((frame[2]<<8|frame[3])+4))
@@ -1073,7 +1049,7 @@ static void ExtractFilenamesFromProtocol(uint8_t *frame, uint16_t len)
             if(separator_count == 2)
             {
                 /* 如果当前文件名长度大于0，则切换到下一个文件 */
-                if(mp4_name_len[current_file_index] > 0)
+                if(current_file_index<5 && mp4_name_len[current_file_index] > 0)
                 {
                     current_file_index++;
                     if(current_file_index >= 5)
@@ -1099,7 +1075,7 @@ static void ExtractFilenamesFromProtocol(uint8_t *frame, uint16_t len)
     }
     
     /* 如果最后一个文件名有内容，增加文件计数 */
-    if(mp4_name_len[current_file_index] > 0)
+    if(current_file_index<5 && mp4_name_len[current_file_index] > 0)
     {
         current_file_index++;
     }
@@ -1120,6 +1096,7 @@ static void ExtractFilenamesFromProtocol(uint8_t *frame, uint16_t len)
 void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
     uint16_t write_param[10];
+    if(uart!=&Uart_R11 || len<6) return;
     if(frame[0] == 0xAA && frame[1] == 0x55)
     {
         if(len < 6 || len < ((frame[2]<<8|frame[3])+4))
@@ -1133,6 +1110,7 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             return;
         }else{
             len -= 2;
+            if(len<6) return;
         }
         #endif /* sysADVERTISE_MODE_ENABLED */
         switch (frame[4])
@@ -1141,26 +1119,33 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
         case cmdMP4_PREVFILE:
         case cmdMP4_NEXTFILE:
             /* 提取以0x23 0x23(##)为分隔符的文件名 */            
+            if(len<9) break;
             ExtractFilenamesFromProtocol(frame, len);
+            VideoFilesReported(frame[4]);
             break;
         case cmdMP4_PAUSE:
-            r11_player.state = 0x05;
         case cmdMP4_REPLAY:
-            r11_player.state = 0x01;
         case cmdMP4_STOP:
-            r11_player.state = 0x04;
         case cmdMP4_PLAY:     /* 播放状态反馈*/
-            r11_player.state = frame[5];
-            write_param[0] = (uint16_t)r11_player.state;
-            write_dgus_vp(PLAY_STATUS_ADDR, (uint8_t*)&write_param[0], 1);
+            if(len<6 || frame[5]>7) break;
+            VideoStateReported(frame[5]);
+            break;
+        case cmdMP4_PLAY_BY_NUM:
+            if(len>=6 && video_ui_pending==cmdMP4_PLAY_BY_NUM && frame[5]!=1) {
+                video_ui_pending=0; VideoVp(VIDEO_UI_STATUS_ADDR,2);
+            }
             break;
         case cmdCHECK_STATUS_NET:
+            if(len<7) break;
             write_dgus_vp(CHECK_NET_STATUS_ADDR,&frame[5],1);
             break;
         case cmdCHECK_STATUS_DEVICE:
+            if(len<7) break;
             write_dgus_vp(CHECK_DEVICE_STATUS_ADDR,&frame[5],1);
             break;
-        case cmdMP4_LOOP_MODE_SET:       
+        case cmdMP4_LOOP_MODE_SET:
+            if(len<7) break;
+            write_param[0]=0;
             /**
              * 处理云端下发的循环播放指令
              * t5l：
@@ -1196,13 +1181,12 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             #endif /* sysADVERTISE_MODE_ENABLED END */
             write_param[0] = r11_player.store_type<<8|MP4;
             T5lSendUartDataToR11(cmdMP4_UPDATEFILE, (uint8_t *)&write_param[0]);
+            break;
         case cmdMP4_NOW_PLAY_NUMBER:
-            /* 当前播放状态更改，需要更新*/
-            r11_player.now_play_serial = (uint16_t)frame[5];
-            /* 在播放时或者循环时会高亮显示对应的视频名称*/
-            R11PlayHighlightVideo();
+            VideoSerialReported(frame[5]);
             break;
         case cmdMP4_STORAGE_MEDIUM_STATUS:
+            VideoMediaChanged();
             #if STORAGE_DISCONN_PAGE
             SwitchPageById(STORAGE_DISCONN_PAGE);
             #endif /* STORAGE_DISCONN_PAGE */

@@ -11,6 +11,7 @@ extern UART_TYPE Uart2, Uart_R11;
 extern uint8_t ET0;
 uint32_t GetSysTick(void);
 uint16_t ReadPageId(void);
+void SwitchPageById(uint16_t);
 void write_dgus_vp(uint32_t address, uint8_t *bytes, uint16_t count);
 void read_dgus_vp(uint32_t address, uint8_t *bytes, uint8_t count);
 uint16_t crc_16(uint8_t *bytes, uint16_t length);
