@@ -9,6 +9,12 @@ static uint32_t tick;
 static Request requests[256];
 static unsigned request_count, usb_count, checks, failed_line;
 static uint8_t usb_frame[6];
+static uint8_t idle_active,wake_blocked;
+static uint16_t idle_return;
+void R11VideoTouchTask(uint8_t allow) {(void)allow;}
+uint8_t R11VideoIdleActive(void) {return idle_active && page==121;}
+uint16_t R11VideoIdleReturnPage(void) {return idle_return;}
+uint8_t R11VideoWakeBlocked(void) {return wake_blocked;}
 
 #define CHECK(condition) do { ++checks; if (!(condition)) { failed_line = __LINE__; return; } } while (0)
 
@@ -104,6 +110,7 @@ static void reset_at(uint32_t start)
     device[0]=20;device[1]=20;device[5]=(uint16_t)-50;device[8]=100;device[9]=150;
     device[16]=1;device[80]=30;device[81]=100;device[83]=700;device[85]=30;device[44]=0xffff;
     page = 1; tick = start; request_count = usb_count = 0;
+    idle_active=wake_blocked=0;idle_return=42;
     FwProtocolInit();
 }
 static void reset(void) { reset_at(0); }
@@ -264,8 +271,36 @@ static void test_usb_independent(void) {
  f[5]=3;FwUsbProtocol(&Uart_R11,f,6);CHECK(vp[USB_COMPLETE_VP]);CHECK(!vp[USB_VIDEO_VP]);
 }
 extern int printf(const char *,...);
+static void test_result_belongs_to_original_page(void) {
+ static const uint16_t ps[]={8,10,11,12,13,15,16,17,18,19,20,21,22,43};
+ unsigned before,i;
+ for(i=0;i<sizeof(ps)/sizeof(ps[0]);i++) {
+  online();event(0x0303);advance(100);CHECK(vp[FW_UI_STATUS_ICON_VP]==3);
+  device[16]=ps[i];advance(1000);finish_snapshot();CHECK(page==ps[i] && vp[FW_UI_STATUS_ICON_VP]==0);
+ }
+ online();event(0x0303);advance(100);CHECK(vp[FW_UI_STATUS_ICON_VP]==3);
+ before=request_count;device[16]=11;advance(1000);finish_snapshot();
+ CHECK(page==11 && vp[FW_UI_RESULT_VP]==0 && vp[FW_UI_STATUS_ICON_VP]==0);
+ CHECK(requests[before].command==3);event(0x0303);advance(100);CHECK(vp[FW_UI_STATUS_ICON_VP]==3);
+ device[16]=13;advance(1000);finish_snapshot();CHECK(page==13 && vp[FW_UI_STATUS_ICON_VP]==0);
+ /* A queued action cancelled by a controller page change must not mark the new page failed. */
+ online();device[16]=10;device[42]=1U<<14;advance(1000);finish_snapshot();
+ advance(1000);reply();FwProtocolTask();event(0x0303);device[16]=19;reply();FwProtocolTask();advance(100);
+ CHECK(page==19 && vp[FW_UI_STATUS_ICON_VP]==0);
+}
+static void test_idle_keeps_edit_session_and_blocks_wake_action(void) {
+ unsigned before;
+ online();go(27);vp[FW_EDIT_VP]=21;idle_return=27;idle_active=1;page=121;
+ advance(1000);finish_snapshot();CHECK(page==121 && vp[FW_EDIT_VP]==21);
+ before=request_count;event(0x0101);CHECK(request_count==before && vp[FW_UI_EVENT_VP]==0);
+ page=27;idle_active=0;wake_blocked=1;event(0x0101);CHECK(request_count==before);
+ wake_blocked=0;FwProtocolTask();CHECK(vp[FW_EDIT_VP]==21);
+ event(0x0300);CHECK(requests[request_count-1].address==0 && requests[request_count-1].value==21);
+}
 int main(void) {
  void (*tests[])(void)={test_initial_and_poll,test_units_signed_and_bounds,test_edit_refresh_cancel,test_save_snapshot_and_repeat,test_partial_failure_and_recovery,test_read_timeout_cancels_queued_action,test_no_command_retry_and_fast_clicks,test_pages_local_and_unknown,test_alarm_mapping,test_warning_pages_and_return,test_warning_clear_fixed_mapping,test_warning_clear_invalid_and_timeout,test_warning_clear_queued_page_change,test_component_gates_and_noops,test_parser_split_crc_and_deadline,test_usb_independent};
  unsigned i;for(i=0;i<sizeof(tests)/sizeof(tests[0]);i++){tests[i]();if(failed_line){printf("FAIL scenario %u line %u\n",i+1,failed_line);return 1;}}
+ test_result_belongs_to_original_page();if(failed_line){printf("FAIL page result line %u\n",failed_line);return 1;}++i;
+ test_idle_keeps_edit_session_and_blocks_wake_action();if(failed_line){printf("FAIL idle edit line %u\n",failed_line);return 1;}++i;
  printf("FW: %u scenarios, %u assertions passed\n",i,checks);return 0;
 }

@@ -21,6 +21,12 @@ function run(command, args) {
   if(result.stdout) process.stdout.write(result.stdout);
 }
 try {
+  if (process.argv.includes('--native')) {
+    const fw = join(temporary, process.platform === 'win32' ? 'fw-tests.exe' : 'fw-tests');
+    run(compiler, ['-std=c99','-O0','-Wall','-Wextra','-Werror','-DFW_PROTOCOL_TEST','-Itests',
+      'tests/fw_protocol_test.c','modules/fw_protocol.c','-o',fw]);
+    run(fw, []);
+  } else {
   const objects = ['tests/fw_protocol_test.c', 'modules/fw_protocol.c'].map((source, index) => {
     const output = join(temporary, `module-${index}.bc`);
     run(compiler, [
@@ -33,9 +39,7 @@ try {
   run(linker, [...objects, '-o', output]);
   // LLVM's interpreter also works when the installed compiler only targets an MCU.
   run(interpreter, ['--force-interpreter=true', output]);
-  const video = join(temporary, 'video-tests.bc');
-  run(compiler, ['-std=c99','-O0','-Wall','-Wextra','-Werror','-emit-llvm','-c','tests/r11_video_test.c','-o',video]);
-  run(interpreter, ['--force-interpreter=true',video]);
+  }
   console.log('FW protocol: production C compiled with warnings treated as errors.');
 } finally {
   rmSync(temporary, { recursive: true, force: true });

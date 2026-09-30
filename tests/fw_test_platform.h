@@ -18,5 +18,9 @@ uint16_t crc_16(uint8_t *bytes, uint16_t length);
 void SendModbusReadHoldingRegistersFrame(UART_TYPE *, uint8_t, uint16_t, uint16_t);
 void SendModbusWriteSingleRegisterFrame(UART_TYPE *, uint8_t, uint16_t, uint16_t);
 void UartSendData(UART_TYPE *, uint8_t *, uint16_t);
+void R11VideoTouchTask(uint8_t);
+uint8_t R11VideoIdleActive(void);
+uint16_t R11VideoIdleReturnPage(void);
+uint8_t R11VideoWakeBlocked(void);
 #include "../modules/fw_protocol.h"
 #endif

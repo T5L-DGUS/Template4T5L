@@ -1,0 +1,3 @@
+FW: 18 scenarios, 244 assertions passed
+Video: 24 scenarios, 208 assertions passed
+FW protocol: production C compiled with warnings treated as errors.

@@ -395,7 +395,7 @@ void R11VideoPlayerProcess(void)
     }else if(video_init_process == VIDEO_PROCESS_SEARCH_LOOP)
     {
         #if sysADVERTISE_MODE_ENABLED
-        /* The UI owns page changes; R11 keeps its existing playlist policy. */
+        /* The local UI sets the loop only after the first file starts. */
         video_init_process = VIDEO_PROCESS_COMPLETE;
         #else
         /** 2.检查循环播放设置,如果开启循环，则认为已经开始自动播放，0xxx00为不循环，0xxx01循环当前，0x0002循环云端的视频发给r11不更新规则，0x0102循环所有并且发给r11更新规则 */
@@ -458,7 +458,7 @@ void R11VideoPlayerProcess(void)
         #if sysBEAUTY_MODE_ENABLED
         r11_send_buf[0] = r11_player.store_type = SDCARD;
         #elif sysADVERTISE_MODE_ENABLED
-        r11_send_buf[0] = r11_player.store_type = exUDISK;
+        r11_send_buf[0] = r11_player.store_type = UDISK;
         #else
         r11_send_buf[0] = r11_player.store_type = SDCARD;
         #endif /* sysADVERTISE_MODE_ENABLED END */
@@ -506,13 +506,327 @@ void R11VideoPlayerProcess(void)
 }
 
 
-#include "r11_video_ui.inc"
+/* Local video UI and touch-inactivity advertising. No FW page/command writes. */
+static uint16_t xdata video_ui_page=0xffff, video_ui_pending, video_ui_target;
+static uint8_t xdata video_ui_enter, video_ui_known, video_ui_query, video_title_dirty, video_resume_fallback, video_next_due;
+static uint32_t xdata video_ui_sent;
+/* Query: 0 not sent, 1 waiting, 2 received, 3 timed out (late reply allowed).
+ * R11 does not acknowledge a T5L 0x90 loop setting: track transmission only. */
+static uint8_t xdata video_loop_sent;
+static uint16_t xdata video_idle_return=42, video_idle_seen=0xffff;
+/* Entry ownership survives page-readback delay and R11 restart. Only an
+ * explicit fullscreen key on page 120 may use 120 as its return target. */
+static uint16_t xdata video_full_origin=0xffff;
+static uint8_t xdata video_idle_entering;
+static uint8_t xdata video_idle_active, video_idle_started, video_touch_down, video_wake_pending, video_wake_guard;
+static uint32_t xdata video_idle_at, video_wake_at;
+static uint32_t VideoTime(void)
+{
+    uint32_t t; uint8_t enabled=ET0; ET0=0; t=GetSysTick(); ET0=enabled; return t;
+}
+static void VideoVp(uint16_t a,uint16_t v) { write_dgus_vp(a,(uint8_t*)&v,1); }
+static uint16_t VideoGet(uint16_t a) { uint16_t v; read_dgus_vp(a,(uint8_t*)&v,1); return v; }
+static uint16_t VideoCount(void)
+{
+    uint16_t count=r11_player.total_serial;
+    if(count>VIDEO_UI_MAX_FILES) count=VIDEO_UI_MAX_FILES;
+    if(count>r11_player.page_mp4_nums) count=r11_player.page_mp4_nums;
+    return count;
+}
+static void VideoSend(uint8_t cmd,uint16_t serial)
+{
+    uint8_t buf[3]; buf[0]=MP4; buf[1]=(uint8_t)(serial>>8); buf[2]=(uint8_t)serial;
+    T5lSendUartDataToR11(cmd,buf);
+    video_ui_pending=cmd; video_ui_target=serial; video_ui_sent=VideoTime();
+    VideoVp(VIDEO_UI_STATUS_ADDR,1);
+}
+/* The existing 0x21..0x25 keys select filename slots, using R11 command 0x64.
+ * Do not send these UI key values as R11 wire opcodes or use 0x74 here. */
+static void VideoPlayFileKey(uint16_t key)
+{
+    uint16_t slot=key-keyMP4_1FILE;
+    if(key<keyMP4_1FILE || key>keyMP4_5FILE || slot>=VideoCount()) return;
+    if(!mp4_name_len[slot]) { VideoVp(VIDEO_UI_STATUS_ADDR,2); return; }
+    r11_player.store_type=UDISK; r11_player.serial=(uint8_t)slot;
+    T5lSendUartDataToR11(cmdMP4_PLAY,mp4_name[slot]);
+    video_ui_pending=cmdMP4_PLAY; video_ui_target=slot; video_ui_sent=VideoTime();
+    video_next_due=0; VideoVp(VIDEO_UI_STATUS_ADDR,1);
+}
+static uint8_t VideoIdlePage(uint16_t p)
+{
+    return p==1 || p==2 || p==27 || p==42;
+}
+uint8_t R11VideoIdleActive(void)
+{
+    return (video_idle_active || VideoIdlePage(video_full_origin)) && ReadPageId()==121;
+}
+uint16_t R11VideoIdleReturnPage(void) { return video_idle_return; }
+uint8_t R11VideoWakeBlocked(void) { return video_wake_guard; }
+static void VideoIdleDismiss(void)
+{
+    uint16_t target=VideoIdlePage(video_full_origin)?video_full_origin:video_idle_return;
+    if(!VideoIdlePage(target)) target=42;
+    video_full_origin=0xffff; video_idle_entering=0;
+    video_idle_active=0; video_wake_pending=0; video_wake_guard=1;
+    video_idle_at=video_wake_at=VideoTime();
+    video_ui_enter=0; video_next_due=0;
+    /* Wake always pauses and returns directly to the originating business page. */
+    VideoSend(cmdMP4_PAUSE,0);
+    VideoVp(0x0600,0); VideoVp(0x3710,0);
+    video_idle_seen=target;
+    SwitchPageById(target);
+}
+/* Called at 10 ms from the FW task, independent of the 100 ms R11 scanner.
+ * DGUS 0x0016: 5A01 press, 5A03 held, 5A02 release; clear update flag after read. */
+void R11VideoTouchTask(uint8_t allow_start)
+{
+    uint32_t now=VideoTime();
+    uint16_t touch=VideoGet(sysDGUS_TP_STATUS),p=ReadPageId();
+    uint8_t updated=(touch>>8)==0x5a, state=(uint8_t)touch;
+    if(!video_idle_started) { video_idle_started=1; video_idle_at=now; }
+    if(p==121 && VideoIdlePage(video_full_origin)) {
+        video_idle_active=1; video_idle_entering=0;
+    }
+    if(video_idle_active && p!=121) {
+        /* The switch command may complete before the current-page VP changes.
+         * Do not discard the first entry's return context during that gap. */
+        if(video_idle_entering && p==video_idle_return && now-video_idle_at<1000UL) return;
+        video_idle_active=video_idle_entering=0; video_full_origin=0xffff;
+        video_wake_pending=0; video_idle_at=now;
+    }
+    if(p!=video_idle_seen) { video_idle_seen=p; video_idle_at=now; }
+    if(updated) {
+        VideoVp(sysDGUS_TP_STATUS,0);
+        if(state<=3) {
+            video_idle_at=now;
+            if(state==1 || state==3) video_touch_down=1;
+            else video_touch_down=0;
+            if(video_idle_active) {
+                video_wake_pending=1;
+                /* Return on release: the wake touch cannot hit the underlying page. */
+                if(!video_touch_down) { VideoIdleDismiss(); return; }
+            }
+        }
+    }
+    if(video_wake_guard) {
+        VideoVp(0x0600,0); VideoVp(0x3710,0);
+        if(video_touch_down) video_idle_at=video_wake_at=now;
+        else if(now-video_wake_at>=200UL) video_wake_guard=0;
+        return;
+    }
+    if(video_touch_down) { video_idle_at=now; return; }
+    if(VideoGet(0x3710) || VideoGet(0x0600)) video_idle_at=now;
+    if(video_idle_active) return;
+    /* Only these business/settings pages participate in idle advertising. */
+    if(!allow_start || !VideoIdlePage(p) || video_init_process!=VIDEO_PROCESS_COMPLETE) { video_idle_at=now; return; }
+    if(now-video_idle_at>=VIDEO_IDLE_TIMEOUT_MS) {
+        video_idle_return=p; video_idle_active=1; video_wake_pending=0;
+        video_full_origin=p; video_idle_entering=1; video_idle_at=now;
+        video_ui_enter=1; video_ui_query=0; video_resume_fallback=0;
+        video_idle_seen=121;
+        SwitchPageById(121);
+    }
+}
+static void VideoFullFailure(void)
+{
+    if(R11VideoIdleActive()) VideoIdleDismiss();
+    else if(ReadPageId()==121) {
+        if(video_full_origin==120) { video_full_origin=0xffff; SwitchPageById(120); }
+        else VideoIdleDismiss();
+    }
+}
+void R11VideoUiReset(void)
+{
+    uint8_t empty[MAX_MP3_NAME_LEN];
+    /* Preserve idle return context across an R11 restart. */
+    video_ui_page=0xffff; video_ui_pending=video_ui_enter=video_ui_known=video_ui_query=0;
+    video_loop_sent=0;
+    VideoVp(VIDEO_UI_STATUS_ADDR,2); VideoVp(VIDEO_UI_COUNT_ADDR,0); VideoVp(VIDEO_UI_BUTTON_ADDR,2);
+    r11_player.state=0; r11_player.total_serial=r11_player.page_mp4_nums=0;
+    r11_player.store_type=UDISK;
+    VideoVp(PLAY_STATUS_ADDR,0); memset(empty,0,sizeof(empty));
+    write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,empty,MAX_MP3_NAME_LEN>>1);
+    video_title_dirty=1; video_resume_fallback=video_next_due=0;
+    page_st.video_flag=page_st.fullvideo_flag=0x5a; page_st.video_page=120; page_st.fullvideo_page=121;
+    mainview.video_x_point=16; mainview.video_y_point=64; mainview.video_high=992; mainview.video_weight=448;
+}
+void R11VideoUiTask(void)
+{
+    uint16_t p=ReadPageId(),count=VideoCount();
+    uint8_t active=(p==120 || p==121),was=(video_ui_page==120 || video_ui_page==121);
+    uint8_t query[2];
+    VideoVp(VIDEO_UI_COUNT_ADDR,count);
+    VideoVp(VIDEO_UI_BUTTON_ADDR,video_ui_pending?2:(r11_player.state==1?0:(r11_player.state==4?1:2)));
+    if(p!=video_ui_page) {
+        if(active && !was) {
+            video_ui_enter=1; video_ui_query=0; video_resume_fallback=0;
+        }
+        if(!active && was) {
+            video_ui_enter=0; video_next_due=0;
+            if(video_ui_pending!=cmdMP4_PAUSE && r11_player.state!=4) VideoSend(cmdMP4_PAUSE,0);
+        }
+        if(p==121) { R11ChangePictureLocate(0,0,1024,600,1); Big_Small_Flag=1; }
+        else if(p==120) { R11ChangePictureLocate(16,64,992,448,0); Big_Small_Flag=0; }
+        else if(p==9) R11ChangePictureLocate(16,116,562,434,0);
+        else R11ChangePictureLocate(1024,600,1,1,0);
+        VideoVp(BIG_SMALL_FLAG_ADDR,p==121); R11ClearPicture(0); video_ui_page=p;
+    }
+    if(video_init_process!=VIDEO_PROCESS_COMPLETE) return;
+    if(video_ui_pending && VideoTime()-video_ui_sent>=(video_ui_pending==cmdMP4_UPDATEFILE?5000UL:1500UL)) {
+        if(video_ui_pending==cmdMP4_REPLAY && !video_resume_fallback && active) {
+            video_ui_known=0; video_ui_query=0; video_ui_enter=1; video_resume_fallback=1; video_ui_pending=0;
+        } else if(video_ui_pending==cmdMP4_PAUSE && video_ui_enter && active) {
+            /* A missing exit-pause reply must not cancel a new entry. */
+            video_ui_pending=0; video_ui_known=0;
+        } else {
+            if(video_ui_pending==cmdMP4_UPDATEFILE) video_ui_query=3;
+            video_ui_pending=0; video_ui_enter=0; video_title_dirty=0;
+            VideoVp(VIDEO_UI_STATUS_ADDR,2); VideoFullFailure(); return;
+        }
+    }
+    if(video_ui_enter && !video_ui_pending && !R11VideoWakeBlocked()) {
+        if(!video_ui_query) {
+            query[0]=r11_player.store_type=UDISK; query[1]=MP4;
+            T5lSendUartDataToR11(cmdMP4_UPDATEFILE,query);
+            video_ui_query=1; video_ui_pending=cmdMP4_UPDATEFILE; video_ui_sent=VideoTime();
+            VideoVp(VIDEO_UI_STATUS_ADDR,1);
+        } else if(video_ui_query!=2) {
+            /* Do not mistake cached names for the outstanding query's reply. */
+        } else if(count) {
+            video_ui_enter=0;
+            if(video_ui_known && r11_player.now_play_serial<count && r11_player.state==4) VideoSend(cmdMP4_REPLAY,0);
+            else if(video_ui_known && r11_player.now_play_serial<count && r11_player.state==1) VideoVp(VIDEO_UI_STATUS_ADDR,0);
+            else R11VideoValueHandle(keyMP4_1FILE);
+        } else { video_ui_enter=0; VideoVp(VIDEO_UI_STATUS_ADDR,3); VideoFullFailure(); return; }
+    }
+    if(active && !video_ui_enter && !video_ui_pending && video_next_due && count) {
+        video_next_due=0;
+        VideoPlayFileKey(keyMP4_1FILE+(video_ui_known?(r11_player.now_play_serial+1)%count:0));
+    }
+    if(active && video_ui_known && r11_player.state==1 && !video_ui_enter && !video_ui_pending && !video_loop_sent) {
+        /* Configure only after real filename-play confirmation. More than five
+         * files use the bounded local loop rather than R11's unbounded ALL. */
+        query[0]=r11_player.total_serial>VIDEO_UI_MAX_FILES?0:1;
+        query[1]=query[0]?2:0;
+        T5lSendUartDataToR11(cmdMP4_LOOP_MODE_SET,query);
+        video_loop_sent=1;
+    }
+    if(active && video_ui_known && !video_ui_enter && !video_ui_pending && video_title_dirty && count) {
+        if(r11_player.now_play_serial<count) write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,mp4_name[r11_player.now_play_serial],MAX_MP3_NAME_LEN>>1);
+        video_title_dirty=0;
+    }
+}
+static void VideoFilesReported(uint8_t cmd)
+{
+    /* The R11 0x61 refresh returns its first list with opcode 0x63.
+     * The receive handler validates the first-list index before calling us. */
+    if((cmd==cmdMP4_UPDATEFILE || cmd==cmdMP4_PREVFILE) &&
+       (ReadPageId()==120 || ReadPageId()==121) && r11_player.store_type==UDISK &&
+       (video_ui_pending==cmdMP4_UPDATEFILE || (!video_ui_pending && video_ui_query==3))) {
+        /* A delayed UDISK scan still completes this entry, but never revives
+         * playback after the user has left the player. */
+        video_ui_pending=0; video_ui_query=2; video_ui_enter=1;
+        VideoVp(VIDEO_UI_STATUS_ADDR,VideoCount()?1:3);
+    }
+    video_title_dirty=1;
+    if(!VideoCount() && ReadPageId()==121) { video_ui_enter=0; VideoFullFailure(); }
+}
+static void VideoLoopReported(uint8_t update,uint8_t mode)
+{
+    uint16_t value=((uint16_t)update<<8)|mode;
+    /* Unsolicited cloud-mode notification, not an ACK to our loop command.
+     * It must not complete or fail a pending play/pause/list request. */
+    VideoVp(LOOP_MODE_ADDR,value);
+}
+static void VideoStateReported(uint8_t state,uint8_t reply_cmd)
+{
+    uint8_t old=r11_player.state;
+    r11_player.state=state; VideoVp(PLAY_STATUS_ADDR,state);
+    if(video_ui_pending==cmdMP4_PLAY && reply_cmd==cmdMP4_PLAY && state==1) {
+        /* R11 has confirmed filename playback, so the requested slot is now current. */
+        r11_player.now_play_serial=video_ui_target; video_ui_known=1; video_title_dirty=1;
+        VideoVp(NP4_NOW_NUM_ADDR,video_ui_target);
+        video_ui_pending=0; VideoVp(VIDEO_UI_STATUS_ADDR,0);
+    } else if((video_ui_pending==cmdMP4_PAUSE && state==4) || (video_ui_pending==cmdMP4_REPLAY && state==1)) {
+        video_ui_pending=0; VideoVp(VIDEO_UI_STATUS_ADDR,0);
+    }
+    if(state==1 && ReadPageId()!=120 && ReadPageId()!=121 && video_ui_pending!=cmdMP4_PAUSE) VideoSend(cmdMP4_PAUSE,0);
+    if(old==1 && state==3 && !video_ui_pending && video_loop_sent &&
+       r11_player.total_serial>VIDEO_UI_MAX_FILES && (ReadPageId()==120 || ReadPageId()==121)) video_next_due=1;
+}
+static void VideoSerialReported(uint16_t serial)
+{
+    if(serial>=VIDEO_UI_MAX_FILES || serial>=VideoCount()) {
+        video_ui_known=0; video_next_due=1; VideoVp(VIDEO_UI_STATUS_ADDR,2); return;
+    }
+    r11_player.now_play_serial=serial; video_ui_known=1; video_title_dirty=1; VideoVp(NP4_NOW_NUM_ADDR,serial);
+}
+static void VideoMediaChanged(void)
+{
+    uint8_t empty[MAX_MP3_NAME_LEN]; memset(empty,0,sizeof(empty));
+    write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,empty,MAX_MP3_NAME_LEN>>1);
+    video_ui_known=0; r11_player.total_serial=r11_player.page_mp4_nums=0; r11_player.state=0;
+    r11_player.store_type=UDISK;
+    video_ui_pending=0; video_ui_query=0; video_title_dirty=1; video_next_due=0;
+    video_loop_sent=0;
+    video_ui_enter=(ReadPageId()==120 || ReadPageId()==121);
+    VideoVp(PLAY_STATUS_ADDR,0); VideoVp(VIDEO_UI_STATUS_ADDR,2);
+}
+static uint8_t VideoUiKey(uint16_t key)
+{
+    uint16_t count=VideoCount(),next,touch;
+    uint8_t filekey=(key>=keyMP4_1FILE && key<=keyMP4_5FILE);
+    if(key!=keyMP4_PREVIOUS_VIDEO && key!=keyMP4_NEXT_VIDEO && key!=keyMP4_TOGGLE_PAUSE &&
+       key!=keyMP4_IMG_SET_BIG && key!=keyMP4_IMG_SET_SMALL && key!=keyMP4_PAUSE && key!=keyMP4_REPLAY && !filekey) return 0;
+    if(R11VideoWakeBlocked()) return 1;
+    if(key==keyMP4_IMG_SET_SMALL) {
+        if(R11VideoIdleActive()) {
+            /* The R11 scan may run just before the 10 ms touch task. */
+            touch=VideoGet(sysDGUS_TP_STATUS);
+            if((touch>>8)==0x5a && ((uint8_t)touch==1 || (uint8_t)touch==3)) video_touch_down=1;
+            video_wake_pending=1; if(!video_touch_down) VideoIdleDismiss();
+        }
+        else VideoFullFailure();
+        return 1;
+    }
+    if(ReadPageId()!=120 && ReadPageId()!=121) return 1;
+    if(key==keyMP4_IMG_SET_BIG) {
+        if(count && ReadPageId()==120) {
+            video_full_origin=120; video_idle_active=video_idle_entering=0;
+            SwitchPageById(121);
+        }
+        return 1;
+    }
+    if(video_ui_pending || video_ui_enter) return 1;
+    if(!count) { VideoVp(VIDEO_UI_STATUS_ADDR,3); return 1; }
+    if(filekey) VideoPlayFileKey(key);
+    else if(key==keyMP4_PREVIOUS_VIDEO || key==keyMP4_NEXT_VIDEO) {
+        if(count<2 || !video_ui_known || r11_player.now_play_serial>=count) return 1;
+        next=key==keyMP4_NEXT_VIDEO?(r11_player.now_play_serial+1)%count:(r11_player.now_play_serial?r11_player.now_play_serial-1:count-1);
+        VideoPlayFileKey(keyMP4_1FILE+next);
+    } else if(key==keyMP4_TOGGLE_PAUSE) {
+        if(r11_player.state==1) VideoSend(cmdMP4_PAUSE,0);
+        else if(r11_player.state==4) VideoSend(cmdMP4_REPLAY,0);
+        else { video_ui_enter=1; video_ui_query=0; }
+    } else VideoSend(key==keyMP4_PAUSE?cmdMP4_PAUSE:cmdMP4_REPLAY,0);
+    return 1;
+}
 
 void R11VideoValueHandle(uint16_t dgus_value)
 {
     #define MAX_MP4_NUMBER        256
     uint8_t r11_send_buf[6];
+    if(R11VideoWakeBlocked()) return;
     if(VideoUiKey(dgus_value)) return;
+#if sysADVERTISE_MODE_ENABLED
+    /* This screen uses only first-page filename keys 0x21..0x25. */
+    if(dgus_value>=keyMP4_PLAY_BY_NUM && dgus_value<keyMP4_PLAY_BY_NUM+MAX_MP4_NUMBER) {
+        if(dgus_value-keyMP4_PLAY_BY_NUM<VIDEO_UI_MAX_FILES)
+            VideoUiKey(keyMP4_1FILE+dgus_value-keyMP4_PLAY_BY_NUM);
+        return;
+    }
+    if(dgus_value==keyMP4_NEXTFILE || dgus_value==keyMP4_PREVFILE) return;
+#endif
 
     if(dgus_value >= keyMP4_PLAY_BY_NUM && dgus_value < keyMP4_PLAY_BY_NUM + MAX_MP4_NUMBER)
     {
@@ -630,6 +944,9 @@ void R11VideoValueHandle(uint16_t dgus_value)
         }
 
         R11ChangePictureLocate(mainview.video_x_point,mainview.video_y_point,mainview.video_high,mainview.video_weight,0x00);
+#if sysADVERTISE_MODE_ENABLED
+        r11_player.store_type=UDISK;
+#endif
         r11_send_buf[0] = r11_player.store_type;
         r11_send_buf[1] = r11_player.Document_type = MP4;
         T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
@@ -1095,7 +1412,9 @@ static void ExtractFilenamesFromProtocol(uint8_t *frame, uint16_t len)
 
 void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
+    #if !sysADVERTISE_MODE_ENABLED
     uint16_t write_param[10];
+    #endif
     if(uart!=&Uart_R11 || len<6) return;
     if(frame[0] == 0xAA && frame[1] == 0x55)
     {
@@ -1120,6 +1439,12 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
         case cmdMP4_NEXTFILE:
             /* 提取以0x23 0x23(##)为分隔符的文件名 */            
             if(len<9) break;
+            #if sysADVERTISE_MODE_ENABLED
+            /* Only the first five UDISK files belong to this UI. Reject other
+             * list pages before they overwrite the filenames used by 0x21. */
+            if((frame[4]!=cmdMP4_UPDATEFILE && frame[4]!=cmdMP4_PREVFILE) ||
+               frame[7]!=0 || frame[8]!=0 || r11_player.store_type!=UDISK) break;
+            #endif
             ExtractFilenamesFromProtocol(frame, len);
             VideoFilesReported(frame[4]);
             break;
@@ -1128,7 +1453,7 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
         case cmdMP4_STOP:
         case cmdMP4_PLAY:     /* 播放状态反馈*/
             if(len<6 || frame[5]>7) break;
-            VideoStateReported(frame[5]);
+            VideoStateReported(frame[5],frame[4]);
             break;
         case cmdMP4_PLAY_BY_NUM:
             if(len>=6 && video_ui_pending==cmdMP4_PLAY_BY_NUM && frame[5]!=1) {
@@ -1145,6 +1470,9 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             break;
         case cmdMP4_LOOP_MODE_SET:
             if(len<7) break;
+            #if sysADVERTISE_MODE_ENABLED
+            VideoLoopReported(frame[5],frame[6]);
+            #else
             write_param[0]=0;
             /**
              * 处理云端下发的循环播放指令
@@ -1175,12 +1503,13 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             #if sysBEAUTY_MODE_ENABLED
             r11_player.store_type = SDCARD;
             #elif sysADVERTISE_MODE_ENABLED
-            r11_player.store_type = exUDISK;
+            r11_player.store_type = UDISK;
             #else
             r11_player.store_type = SDCARD;
             #endif /* sysADVERTISE_MODE_ENABLED END */
             write_param[0] = r11_player.store_type<<8|MP4;
             T5lSendUartDataToR11(cmdMP4_UPDATEFILE, (uint8_t *)&write_param[0]);
+            #endif
             break;
         case cmdMP4_NOW_PLAY_NUMBER:
             VideoSerialReported(frame[5]);
