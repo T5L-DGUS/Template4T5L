@@ -36,10 +36,12 @@ static code FwRange ranges[] = {
     {30,8}, {39,1}, {41,5}, {50,2}, {53,1}, {69,9}, {79,5}, {85,1}
 };
 static code FwRange live_ranges[] = {
-    {13,1}, {16,1}, {30,3}, {34,4}, {39,1}, {41,4}, {50,2}, {82,1}
+    {13,1}, {16,1}, {30,3}, {34,4}, {39,1}, {41,4}, {50,2}, {53,1}, {82,1}
 };
 static code uint8_t basic_fields[] = {4,5};
 static code uint8_t advanced_fields[] = {0,1,8,9,11,17,70,76,80,81,82,83,85};
+static code uint8_t advanced2_fields[] = {18,19,21,69,71,72,73,74,75,77,79};
+static code uint8_t advanced2_decimals[] = {0,0,1,0,0,0,1,1,0,0,0};
 static code uint8_t display_fields[] = {4,5,0,1,8,9,11,17,70,76,80,81,82,83,85};
 static code uint8_t display_decimals[] = {0,1,1,0,0,0,0,0,0,0,1,2,0,1,0};
 static code uint8_t live_fields[] = {13,30,31,32,34,35,36,37,50,51,43,0};
@@ -65,6 +67,8 @@ static uint16_t request_address, request_value, request_count;
 static uint16_t last_page;
 static uint16_t ui_result_page;
 static uint32_t sent_at, last_rx;
+static uint16_t hardness_seen, hardness_limit_seen;
+static uint8_t hardness_ready;
 
 static uint32_t FwNow(void)
 {
@@ -141,6 +145,7 @@ static uint8_t UiKey(uint16_t k)
 }
 static uint8_t Valid(uint16_t a) { return (mirror_valid[a>>3] & (1U<<(a&7))) != 0; }
 static uint8_t DisplayValid(uint16_t a) { return (display_valid[a>>3] & (1U<<(a&7))) != 0; }
+static uint8_t UiSettingsPage(uint16_t p) { return p==2 || p==27 || p==FW_UI_ADV2_PAGE; }
 static uint16_t UiLogicalPage(void)
 {
 #if sysADVERTISE_MODE_ENABLED
@@ -274,7 +279,8 @@ static void LocalTask(uint32_t now)
 }
 static void UiDisplay(void)
 {
-    uint8_t i, a;
+    uint8_t i, a, parts_valid=!offline && DisplayValid(44);
+    uint16_t parts=FwGet(FW_MIRROR_VP+44);
     uint16_t result=FwGet(FW_UI_RESULT_VP);
     /* A previous page's failed action is not a failure to enter this page. */
     if(ui_result_page!=UiLogicalPage()) result=0;
@@ -288,8 +294,22 @@ static void UiDisplay(void)
         UiNumber(FW_UI_EDIT_TEXT_VP+i*3,FwGet(FW_EDIT_VP+a),display_decimals[i],a==5,
             !offline && editing && (edit_valid[a>>3]&(1U<<(a&7))),3);
     }
+    for(i=0;i<sizeof(advanced2_fields);i++) {
+        a=advanced2_fields[i];
+        UiNumber(FW_UI_ADV2_TEXT_VP+i*3,FwGet(FW_EDIT_VP+a),advanced2_decimals[i],0,
+            !offline && editing && (edit_valid[a>>3]&(1U<<(a&7))),3);
+        if(a==18 || a==69 || a==71 || a==79)
+            UiSet(0x37EA+(a==18?0:(a==69?1:(a==71?2:3))),
+                !offline && editing && (edit_valid[a>>3]&(1U<<(a&7))) && FwGet(FW_EDIT_VP+a)<=1?FwGet(FW_EDIT_VP+a):2);
+    }
+    UiNumber(0x37E1,FwGet(FW_MIRROR_VP+43),2,0,!offline && DisplayValid(43),3);
+    UiNumber(0x37E4,FwGet(FW_MIRROR_VP+44),0,0,!offline && DisplayValid(44),3);
+    UiNumber(0x37E7,FwGet(FW_MIRROR_VP+53),1,1,!offline && DisplayValid(53),3);
     UiSet(FW_UI_MODE_VP,(!offline && DisplayValid(39) && FwGet(FW_MIRROR_VP+39)<=6)?FwGet(FW_MIRROR_VP+39):7);
-    UiSet(FW_UI_PARTS_VP,(!offline && DisplayValid(44))?FwGet(FW_MIRROR_VP+44):0);
+    UiSet(FW_UI_PARTS_VP,parts_valid?parts:0);
+    /* Read-only FW44 indicators: 2 distinguishes unavailable data from bit 0.
+     * The host owns these bits; no screen touch writes FW44 or machine keys. */
+    for(i=0;i<16;i++) UiSet(FW_UI_PART_BIT_VP+i,parts_valid?((parts>>i)&1U):2);
     UiSet(FW_UI_READY_VP,!offline && Valid(16));
     UiSet(FW_UI_STATUS_ICON_VP,offline?4:result);
     UiText(FW_UI_STATUS_VP,offline?"Offline":(result==1?"Saving":
@@ -313,7 +333,7 @@ static void UiAfterReply(uint16_t address, uint16_t value)
     }
 }
 
-/* FW table 20260914: only non-reserved R/W parameters may be submitted. */
+/* FW table 20260930: only non-reserved R/W parameters may be submitted. */
 static uint8_t FwWritable(uint16_t address, uint16_t value)
 {
     switch(address) {
@@ -341,6 +361,32 @@ static uint8_t FwWritable(uint16_t address, uint16_t value)
         case 85: return value >= 10 && value <= 60;
         default: return 0;
     }
+}
+
+/* Link drafts on keyboard confirmation or an upper-limit edit. Never alter
+ * initial control-board data silently. Both registers must have been read. */
+static void UiHardness(void)
+{
+    uint16_t h, limit;
+    if(UiLogicalPage()!=27 || !editing || save_count || ui_write) return;
+    if(offline || !(edit_valid[0]&1) || !(edit_valid[10]&1)) {
+        hardness_ready=0; UiSet(FW_UI_HARDNESS_VP,3); return;
+    }
+    h=FwGet(FW_EDIT_VP); limit=FwGet(FW_EDIT_VP+80);
+    if(hardness_ready && (h!=hardness_seen || limit!=hardness_limit_seen)) {
+        if((h!=edit_base[0] || limit!=edit_base[80]) && FwWritable(0,h) && FwWritable(80,limit) && h>limit) {
+            h=limit; FwSet(FW_EDIT_VP,h); UiSet(FW_UI_HARDNESS_VP,2);
+        } else UiSet(FW_UI_HARDNESS_VP,h>limit?1:0);
+    } else if(!hardness_ready) UiSet(FW_UI_HARDNESS_VP,h>limit?1:0);
+    hardness_seen=h; hardness_limit_seen=limit; hardness_ready=1;
+}
+/* Recheck every actual write against the last confirmed partner value, including
+ * legacy VP3700 writes. These confirmed values are discarded on link failure. */
+static uint8_t FwHardnessWritable(uint16_t a,uint16_t v)
+{
+    if(a==0) return DisplayValid(80) && v<=FwGet(FW_MIRROR_VP+80);
+    if(a==80) return DisplayValid(0) && FwGet(FW_MIRROR_VP)<=v;
+    return 1;
 }
 
 static void FwFinish(uint16_t error)
@@ -496,7 +542,8 @@ void FwProtocolInit(void)
     FwInvalidateMirror();
     for(i=0;i<sizeof(display_valid);i++) display_valid[i]=0;
     full_refresh=1; offline=1; refreshed_at=failed_at=alarm_at=edit_at=FwNow();
-    save_count=save_index=ui_write=alarm_cursor=0; editing=(last_page==2 || last_page==27);
+    save_count=save_index=ui_write=alarm_cursor=hardness_ready=0; editing=UiSettingsPage(last_page);
+    FwSet(FW_UI_HARDNESS_VP,0);
     fw_page=0xffff; return_page=42; operation_page=42; nav_target=warning_submit_page=0;
     for(i=0;i<sizeof(edit_valid);i++) edit_valid[i]=0;
     for(i = FW_WRITE_ADDR_VP; i <= FW_ERROR_VP; ++i) FwSet(i, 0);
@@ -544,11 +591,24 @@ static void UiEvent(void)
     uint8_t i,a,n,good;
     if(!e) return;
     FwSet(FW_UI_EVENT_VP,0);
-    if((e>>8)!=1 && (e>>8)!=2 && (e<0x0300 || e>0x0303) && e!=0x0400 && e!=0x0401) return;
+    if((e>>8)!=1 && (e>>8)!=2 && (e<0x0300 || e>0x0303) && (e<0x0400 || e>0x0405)) return;
     if(!ui_write && !save_count && !FwGet(FW_WRITE_TRIGGER_VP)) ui_result_page=p;
     if(e==0x0400) { SwitchPageById(120); return; }
     if(e==0x0401) { SwitchPageById(9); return; }
+    if(e==0x0402 || e==0x0403) {
+        if(ui_write || save_count || command==6 || FwGet(FW_WRITE_TRIGGER_VP)) return;
+        if(e==0x0402 && p==2) { LocalDraft(); SwitchPageById(FW_UI_ADV2_PAGE); }
+        if(e==0x0403 && p==FW_UI_ADV2_PAGE) SwitchPageById(2);
+        return;
+    }
+    if(e==0x0404 || e==0x0405) {
+        if(ui_write || save_count || command==6 || FwGet(FW_WRITE_TRIGGER_VP)) return;
+        if(e==0x0404 && p==31) SwitchPageById(FW_UI_BOARD2_PAGE);
+        if(e==0x0405 && p==FW_UI_BOARD2_PAGE) SwitchPageById(31);
+        return;
+    }
     if(e==0x0301 && !ui_write && !save_count) {
+        if(p==FW_UI_ADV2_PAGE) { SwitchPageById(2); return; }
         LocalDraft();
         for(i=0;i<89;i++) if(edit_valid[i>>3] & (1U<<(i&7))) FwSet(FW_EDIT_VP+i,edit_base[i]);
         e=0x0200|return_page;
@@ -565,9 +625,10 @@ static void UiEvent(void)
     } else if((e>>8)==2) {
         target=e&255;
         if(target==0) target=UiWarningPage(p)?operation_page:return_page;
-        if(UiPage(target)) { if(p!=2 && p!=27) return_page=p; nav_target=target; UiSubmit(16,target); }
+        if(UiPage(target)) { if(!UiSettingsPage(p)) return_page=p; nav_target=target; UiSubmit(16,target); }
     } else if(e==0x0300 && editing) {
-        n=p==2?sizeof(basic_fields):sizeof(advanced_fields);
+        UiHardness();
+        n=p==2?sizeof(basic_fields):(p==FW_UI_ADV2_PAGE?sizeof(advanced2_fields):sizeof(advanced_fields));
         good=1; save_count=save_index=0;
         local_save=0;
         if(p==2) {
@@ -578,9 +639,21 @@ static void UiEvent(void)
             if(saved_enable && !saved_minutes) good=0;
         }
         for(i=0;i<n;i++) {
-            a=p==2?basic_fields[i]:advanced_fields[i]; v=FwGet(FW_EDIT_VP+a);
+            a=p==2?basic_fields[i]:(p==FW_UI_ADV2_PAGE?advanced2_fields[i]:advanced_fields[i]); v=FwGet(FW_EDIT_VP+a);
             if(!(edit_valid[a>>3] & (1U<<(a&7))) || (v!=edit_base[a] && !FwWritable(a,v))) good=0;
             if(v!=edit_base[a]) { save_addresses[save_count]=a; save_values[save_count++]=v; }
+        }
+        if(p==27) {
+            if(FwGet(FW_EDIT_VP)>FwGet(FW_EDIT_VP+80)) { good=0; FwSet(FW_UI_HARDNESS_VP,1); }
+            /* When increasing the ceiling, acknowledge it before increasing
+             * hardness. On a decrease, FW0 is already first in advanced_fields. */
+            if(FwGet(FW_EDIT_VP+80)>edit_base[80]) {
+                for(i=0;i<save_count;i++) if(save_addresses[i]==80) {
+                    v=save_values[i];
+                    while(i) { save_addresses[i]=save_addresses[i-1]; save_values[i]=save_values[i-1]; --i; }
+                    save_addresses[0]=80; save_values[0]=v; break;
+                }
+            }
         }
         if(!good) { save_count=0; FwSet(FW_UI_RESULT_VP,3); }
         else {
@@ -630,8 +703,8 @@ void FwProtocolTask(void)
     if(page != last_page) {
         last_page = page;
         /* Local overlays/player do not trigger extra business reads. */
-        if(!offline && (page==2 || page==27)) refresh_pending = 1;
-        editing=(page==2 || page==27);
+        if(!offline && UiSettingsPage(page)) refresh_pending = 1;
+        editing=UiSettingsPage(page); hardness_ready=0;
         if(page==2) LocalDraft();
         /* Clear completed, page-local feedback; keep active operation ownership. */
         if(!ui_write && !save_count) { FwSet(FW_UI_RESULT_VP,0); ui_result_page=page; }
@@ -644,6 +717,7 @@ void FwProtocolTask(void)
     else
 #endif
     UiEvent();
+    UiHardness();
     if(local_save==2 && !command) LocalCommit();
     UiAlarm(now);
     if(now-edit_at>=100UL) { edit_at=now; UiDisplay(); }
@@ -664,7 +738,7 @@ void FwProtocolTask(void)
             }
             warning_submit_page=0;
         }
-        if(command || offline || trigger != 1 || !FwWritable(address, value)) {
+        if(command || offline || trigger != 1 || !FwWritable(address, value) || !FwHardnessWritable(address,value)) {
             if(timer_owner) { timer_owner=0; timer_fault=1; }
             local_save=0;
             FwSet(FW_WRITE_RESULT_VP, 3);
