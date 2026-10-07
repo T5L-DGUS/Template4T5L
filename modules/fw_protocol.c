@@ -69,6 +69,8 @@ static uint16_t ui_result_page;
 static uint32_t sent_at, last_rx;
 static uint16_t hardness_seen, hardness_limit_seen;
 static uint8_t hardness_ready;
+static uint16_t temp_low_seen, temp_high_seen;
+static uint8_t temp_limits_ready;
 
 static uint32_t FwNow(void)
 {
@@ -380,12 +382,29 @@ static void UiHardness(void)
     } else if(!hardness_ready) UiSet(FW_UI_HARDNESS_VP,h>limit?1:0);
     hardness_seen=h; hardness_limit_seen=limit; hardness_ready=1;
 }
+/* FW74 lower temperature difference must not exceed FW73 upper difference.
+ * Link only user-edited drafts, after both values have been read successfully. */
+static void UiTemperatureLimits(void)
+{
+    uint16_t low, high;
+    if(UiLogicalPage()!=FW_UI_ADV2_PAGE || !editing || save_count || ui_write) return;
+    if(offline || (edit_valid[9]&6)!=6) { temp_limits_ready=0; return; }
+    low=FwGet(FW_EDIT_VP+74); high=FwGet(FW_EDIT_VP+73);
+    if(temp_limits_ready && (low!=temp_low_seen || high!=temp_high_seen) &&
+       (low!=edit_base[74] || high!=edit_base[73]) &&
+       FwWritable(74,low) && FwWritable(73,high) && low>high) {
+        low=high; FwSet(FW_EDIT_VP+74,low);
+    }
+    temp_low_seen=low; temp_high_seen=high; temp_limits_ready=1;
+}
 /* Recheck every actual write against the last confirmed partner value, including
  * legacy VP3700 writes. These confirmed values are discarded on link failure. */
-static uint8_t FwHardnessWritable(uint16_t a,uint16_t v)
+static uint8_t FwPairedWritable(uint16_t a,uint16_t v)
 {
     if(a==0) return DisplayValid(80) && v<=FwGet(FW_MIRROR_VP+80);
     if(a==80) return DisplayValid(0) && FwGet(FW_MIRROR_VP)<=v;
+    if(a==73) return DisplayValid(74) && FwGet(FW_MIRROR_VP+74)<=v;
+    if(a==74) return DisplayValid(73) && v<=FwGet(FW_MIRROR_VP+73);
     return 1;
 }
 
@@ -542,7 +561,7 @@ void FwProtocolInit(void)
     FwInvalidateMirror();
     for(i=0;i<sizeof(display_valid);i++) display_valid[i]=0;
     full_refresh=1; offline=1; refreshed_at=failed_at=alarm_at=edit_at=FwNow();
-    save_count=save_index=ui_write=alarm_cursor=hardness_ready=0; editing=UiSettingsPage(last_page);
+    save_count=save_index=ui_write=alarm_cursor=hardness_ready=temp_limits_ready=0; editing=UiSettingsPage(last_page);
     FwSet(FW_UI_HARDNESS_VP,0);
     fw_page=0xffff; return_page=42; operation_page=42; nav_target=warning_submit_page=0;
     for(i=0;i<sizeof(edit_valid);i++) edit_valid[i]=0;
@@ -628,6 +647,7 @@ static void UiEvent(void)
         if(UiPage(target)) { if(!UiSettingsPage(p)) return_page=p; nav_target=target; UiSubmit(16,target); }
     } else if(e==0x0300 && editing) {
         UiHardness();
+        UiTemperatureLimits();
         n=p==2?sizeof(basic_fields):(p==FW_UI_ADV2_PAGE?sizeof(advanced2_fields):sizeof(advanced_fields));
         good=1; save_count=save_index=0;
         local_save=0;
@@ -652,6 +672,19 @@ static void UiEvent(void)
                     v=save_values[i];
                     while(i) { save_addresses[i]=save_addresses[i-1]; save_values[i]=save_values[i-1]; --i; }
                     save_addresses[0]=80; save_values[0]=v; break;
+                }
+            }
+        }
+        if(p==FW_UI_ADV2_PAGE) {
+            if(FwGet(FW_EDIT_VP+74)>FwGet(FW_EDIT_VP+73)) good=0;
+            /* Default order is upper then lower. If reducing the upper bound,
+             * acknowledge a changed lower bound first, preserving the relation
+             * even if a later write fails and the remainder is not submitted. */
+            if(FwGet(FW_EDIT_VP+73)<edit_base[73]) {
+                for(i=0;i<save_count;i++) if(save_addresses[i]==74) {
+                    v=save_values[i];
+                    while(i) { save_addresses[i]=save_addresses[i-1]; save_values[i]=save_values[i-1]; --i; }
+                    save_addresses[0]=74; save_values[0]=v; break;
                 }
             }
         }
@@ -704,7 +737,7 @@ void FwProtocolTask(void)
         last_page = page;
         /* Local overlays/player do not trigger extra business reads. */
         if(!offline && UiSettingsPage(page)) refresh_pending = 1;
-        editing=UiSettingsPage(page); hardness_ready=0;
+        editing=UiSettingsPage(page); hardness_ready=temp_limits_ready=0;
         if(page==2) LocalDraft();
         /* Clear completed, page-local feedback; keep active operation ownership. */
         if(!ui_write && !save_count) { FwSet(FW_UI_RESULT_VP,0); ui_result_page=page; }
@@ -718,6 +751,7 @@ void FwProtocolTask(void)
 #endif
     UiEvent();
     UiHardness();
+    UiTemperatureLimits();
     if(local_save==2 && !command) LocalCommit();
     UiAlarm(now);
     if(now-edit_at>=100UL) { edit_at=now; UiDisplay(); }
@@ -738,7 +772,7 @@ void FwProtocolTask(void)
             }
             warning_submit_page=0;
         }
-        if(command || offline || trigger != 1 || !FwWritable(address, value) || !FwHardnessWritable(address,value)) {
+        if(command || offline || trigger != 1 || !FwWritable(address, value) || !FwPairedWritable(address,value)) {
             if(timer_owner) { timer_owner=0; timer_fault=1; }
             local_save=0;
             FwSet(FW_WRITE_RESULT_VP, 3);
