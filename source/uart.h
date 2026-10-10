@@ -26,8 +26,9 @@ typedef struct UartxDefine
 
     uint8_t RxTimeout;                                          /**< 接收超时计数器 */
 
-    uint8_t RxFlag:2;                                           /**< 接收状态标志位(2位) */
-    uint8_t TxBusy:1;                                           /**< 发送忙碌标志位(1位) */
+    /* 主循环与中断共享，使用独立字节，避免位域读改写覆盖另一标志。 */
+    volatile uint8_t RxFlag;                                   /**< 接收状态标志 */
+    volatile uint8_t TxBusy;                                   /**< 发送忙碌标志 */
     uint8_t RxOverflow:1;                                       /**< 接收环溢出，整批丢弃 */
 }UART_TYPE;
 
