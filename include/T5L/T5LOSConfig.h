@@ -132,7 +132,7 @@ typedef            long			int32_t;
 #endif /* sysBEAUTY_MODE_ENABLED */
 
 #if sysADVERTISE_MODE_ENABLED
-#define Uart_R11                     Uart5
+#define Uart_R11                     Uart3
 #define R11_WIFI_ENABLED              1
 #endif /* sysADVERTISE_MODE_ENABLED */  
 
@@ -277,7 +277,7 @@ extern uint32_t sysFCLK;
 #endif  /* uartUART2_ENABLED */
 
 /* UART3配置参数，配置同uart2 */
-#define uartUART3_ENABLED               0
+#define uartUART3_ENABLED               1
 
 #if uartUART3_ENABLED
     #define uartUART3_TXBUF_SIZE         256
@@ -309,7 +309,7 @@ extern uint32_t sysFCLK;
 #endif  /* uartUART4_ENABLED */
 
 /* UART5配置参数，配置同uart2 */
-#define uartUART5_ENABLED               1
+#define uartUART5_ENABLED               0
 
 #if uartUART5_ENABLED
     #define uartUART5_TXBUF_SIZE         256
