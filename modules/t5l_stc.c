@@ -143,9 +143,11 @@ typedef struct _queue_node
 } QUEUE_NODE;
 
 QUEUE_NODE G_Queue; //环形队列
+void nor_flash_write(uint32_t addr, uint8_t* buf, uint16_t len);
 void Dev_Init(void)
 {
     memset(&G_Device_Ctrl, 0, sizeof(G_Device_Ctrl));
+    G_Device_Ctrl.dev_enable=1;
 }
 
 void Set_Input(uint8_t pageid, uint8_t sel)
@@ -1032,7 +1034,7 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
             {
                 G_Device_Ctrl.Humidifier.running = FALSE;
                 // G_Device_Ctrl.Humidifier
-                if (G_Device_Ctrl.Exhaust.auto_vent_en == 0)
+                if (G_Device_Ctrl.Humidifier.auto_mist_en == 0)
                 {
                     G_Device_Ctrl.Humidifier.enable = 0;
                     write_dgus_vp(MIST_VP, (uint8_t *)&G_Device_Ctrl.Humidifier.enable, 1); //更新设置页图标开关状态
@@ -1074,8 +1076,43 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
             }
             break;
         case LOCK_CMDWORD:
-
             break;
+        case SM_FAN_CMDWORD: 
+            if (G_Device_Ctrl.Small_Fan.enable == 0)
+            {
+                G_Device_Ctrl.Small_Fan.enable = 1;
+                // G_Device_Ctrl.Small_Fan.running = TRUE;
+            }
+            else
+            {
+                G_Device_Ctrl.Small_Fan.enable = 0;
+                // G_Device_Ctrl.Small_Fan.running = FALSE;
+            }
+            break;
+        case MIC_LED_CMDWORD: 
+            if (G_Device_Ctrl.MicLed.enable == 0)
+            {
+                G_Device_Ctrl.MicLed.enable = 1;
+                // G_Device_Ctrl.Small_Fan.running = TRUE;
+            }
+            else
+            {
+                G_Device_Ctrl.MicLed.enable = 0;
+                // G_Device_Ctrl.Small_Fan.running = FALSE;
+            }
+            break;
+        case CAMERA_LED_CMDWORD: 
+            if (G_Device_Ctrl.CameraLed.enable == 0)
+            {
+                G_Device_Ctrl.CameraLed.enable = 1;
+                // G_Device_Ctrl.Small_Fan.running = TRUE;
+            }
+            else
+            {
+                G_Device_Ctrl.CameraLed.enable = 0;
+                // G_Device_Ctrl.Small_Fan.running = FALSE;
+            }
+            break;    
         default:
             break;
         }
@@ -1219,12 +1256,7 @@ void sys_config(uint8_t is_beep, uint8_t is_sleep)
 
 void Exhaust_On()
 {
-
-    // if (G_Device_Ctrl.Exhaust.err_sta != 0)
-    // {
-    //     return;
-    // }
-   G_Device_Ctrl.Exhaust.enable = 0;
+    G_Device_Ctrl.Exhaust.enable = 0;
 
     read_dgus_vp(OUTWIND_VP + 1, (uint8_t *)&G_Device_Ctrl.Exhaust.target_speed, 1);
     Send_Cmd_Ctrl(OUTWIND_CMDWORD, G_Device_Ctrl.Exhaust.target_speed);
@@ -1272,10 +1304,13 @@ void UVB_Off(uint8_t auto_flag)
     Send_Cmd_Ctrl(UVB_CMDWORD, (uint8_t)G_Device_Ctrl.UVB.target_brightness);
 }
 
-void UVC_On()
-{
-    
-    memcpy(&G_Back_Device_Ctrl, &G_Device_Ctrl, sizeof(DeviceCtrl));
+
+
+
+
+
+
+void Close_All_Dev(){
     if (G_Device_Ctrl.Exhaust.enable == 1)
     {
         Exhaust_Off(0);
@@ -1302,12 +1337,26 @@ void UVC_On()
     }
     if (G_Device_Ctrl.Anion.enable==1)
     {
-        Anion_Off();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,0);
     }
     if (G_Device_Ctrl.Plasma.enable==1)
     {
-        Plasma_Off();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,0);
     }
+    if (G_Device_Ctrl.Small_Fan.enable==1)
+    {
+        // SMALL_FAN_Off();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Small_Fan.enable,SM_FAN_CMDWORD,0);
+    }
+}
+
+
+
+void UVC_On()
+{
+    
+    memcpy(&G_Back_Device_Ctrl, &G_Device_Ctrl, sizeof(DeviceCtrl));
+    Close_All_Dev();
 
     
     G_Device_Ctrl.UVC.enable = 0;
@@ -1344,21 +1393,29 @@ void UVC_Off()
     }
     if (G_Back_Device_Ctrl.Anion.enable==1)
     {
-        Anion_On();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,1);
     }
     if (G_Back_Device_Ctrl.Plasma.enable==1)
     {
-        Plasma_On();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,1);
     }
-
+    if (G_Back_Device_Ctrl.Small_Fan.enable==1)
+    {
+        // SMALL_FAN_On();
+        Dev_Switch_Ctrl(&G_Device_Ctrl.Small_Fan.enable,SM_FAN_CMDWORD,1);
+    }
 }
+
+
+
+
 
 //目标值传入target_tmp
 void Heater_On(int16_t target_tmp)
 {
     G_Device_Ctrl.Heater.target_temp = (uint16_t)target_tmp;
 
-    if (G_Device_Ctrl.Heater.err_sta != 0 || G_Device_Ctrl.environment.GXHTC3_err_sta != 0 || G_Device_Ctrl.environment.NTC_err_sta != 0)
+    if (G_Device_Ctrl.environment.GXHTC3_err_sta != 0 && G_Device_Ctrl.environment.NTC_err_sta != 0)
     {
         Heater_Off(0);
         return;
@@ -1377,6 +1434,9 @@ void Heater_On(int16_t target_tmp)
         G_Device_Ctrl.Heater.enable = 1;
         G_Device_Ctrl.Heater.running = 1;
         write_dgus_vp(HEATER_VP, "\x00\x01", 1);
+        Start_Once_SaveData();
+        write_dgus_vp(0x535A, "\x00\x01", 1); //设定成功
+        G_Queue.showsuccse_time_ms = 1000;
     }
 }
 
@@ -1391,21 +1451,13 @@ void Heater_Off(uint8_t auto_flag)
 void InWind_On(uint16_t speed)
 {
     G_Device_Ctrl.Inlet_Fan.target_speed = speed;
-
-    // if (G_Device_Ctrl.Inlet_Fan.err_sta != 0)
-    // {
-    //     InWind_Off();
-    //     return;
-    // }
-
-
     G_Device_Ctrl.Inlet_Fan.enable = 0;
     Send_Cmd_Ctrl(INWIND_CMDWORD, (uint8_t)G_Device_Ctrl.Inlet_Fan.target_speed);
     Send_Cmd_Ctrl(INWIND2_CMDWORD, (uint8_t)G_Device_Ctrl.Inlet_Fan.target_speed);
 }
 void InWind_Off()
 {
-     G_Device_Ctrl.Inlet_Fan.target_speed = 0;
+    G_Device_Ctrl.Inlet_Fan.target_speed = 0;
     G_Device_Ctrl.Inlet_Fan.enable = 1;
     Send_Cmd_Ctrl(INWIND_CMDWORD, (uint8_t)G_Device_Ctrl.Inlet_Fan.target_speed);
     Send_Cmd_Ctrl(INWIND2_CMDWORD, (uint8_t)G_Device_Ctrl.Inlet_Fan.target_speed);
@@ -1420,58 +1472,124 @@ void Light_On(uint16_t target_brightness)
 
 void Light_Off()
 {
-   G_Device_Ctrl.Light.target_brightness = 0;
+    G_Device_Ctrl.Light.target_brightness = 0;
     G_Device_Ctrl.Light.enable = 1;
     Send_Cmd_Ctrl(LIGHT_CMDWORD, (uint8_t)G_Device_Ctrl.Light.target_brightness);
 }
 
-void Anion_On(void)
-{
-    G_Device_Ctrl.Anion.enable=0;
+// void Anion_On(void)
+// {
+//     G_Device_Ctrl.Anion.enable=0;
+//     Send_Cmd_Ctrl(ANION_CMDWORD, 1U);
+// }
 
-    Send_Cmd_Ctrl(ANION_CMDWORD, 1U);
+// void Anion_Off(void)
+// {
+//     G_Device_Ctrl.Anion.enable=1;
+//     Send_Cmd_Ctrl(ANION_CMDWORD, 0U);
+// }
+
+// void Plasma_On(void)
+// {
+//     G_Device_Ctrl.Plasma.enable=0;
+//     Send_Cmd_Ctrl(PLASMA_CMDWORD, 1U);
+// }
+
+// void Plasma_Off(void)
+// {
+//     G_Device_Ctrl.Plasma.enable=1;
+//     Send_Cmd_Ctrl(PLASMA_CMDWORD, 0U);
+// }
+
+
+//小风扇
+// void SMALL_FAN_On()
+// {
+//     G_Device_Ctrl.Small_Fan.enable=0;
+//     Send_Cmd_Ctrl(SM_FAN_CMDWORD, 1U);
+// }
+// void SMALL_FAN_Off()
+// {
+//     G_Device_Ctrl.Small_Fan.enable=1;
+//     Send_Cmd_Ctrl(SM_FAN_CMDWORD, 0U);
+// }
+
+// void MicLed_On()
+// {
+//     G_Device_Ctrl.MicLed.enable=0;
+//     Send_Cmd_Ctrl(MIC_LED_CMDWORD, 1U);
+// }
+// void MicLed_Off()
+// {
+//     G_Device_Ctrl.MicLed.enable=1;
+//     Send_Cmd_Ctrl(MIC_LED_CMDWORD, 0U);
+// }
+
+// void CameraLed_On()
+// {
+//     G_Device_Ctrl.CameraLed.enable=0;
+//     Send_Cmd_Ctrl(CAMERA_LED_CMDWORD, 1U);
+// }
+// void CameraLed_Off()
+// {
+//     G_Device_Ctrl.CameraLed.enable=1;
+//     Send_Cmd_Ctrl(CAMERA_LED_CMDWORD, 0U);
+// }
+
+/**
+ * @brief 通用设备开关控制
+ * @param pEnable 结构体enable成员指针
+ * @param cmdWord 设备命令字
+ * @param bOn true=开启，false=关闭
+ * 等离子、负离子、小风扇、麦克led、摄像头led
+ */
+void Dev_Switch_Ctrl(uint16_t *pEnable, uint16_t cmdWord, uint8_t bOn)
+{
+    if(bOn)
+    {
+        *pEnable = 0;
+        Send_Cmd_Ctrl(cmdWord, 1U);
+    }
+    else
+    {
+        *pEnable = 1;
+        Send_Cmd_Ctrl(cmdWord, 0U);
+    }
 }
 
-void Anion_Off(void)
-{
-        G_Device_Ctrl.Anion.enable=1;
 
-    Send_Cmd_Ctrl(ANION_CMDWORD, 0U);
+
+void Dev_Off(){
+
 }
 
-void Plasma_On(void)
-{
-    G_Device_Ctrl.Plasma.enable=0;
-    Send_Cmd_Ctrl(PLASMA_CMDWORD, 1U);
-}
-
-void Plasma_Off(void)
-{
-    G_Device_Ctrl.Plasma.enable=1;
-    Send_Cmd_Ctrl(PLASMA_CMDWORD, 0U);
-}
 
 uint8_t check_passwd_format(uint8_t *u8buf)
 {
     uint8_t i;
-    for (i = 0; i < PASSWD_BTYELEN + 1; i++)
+    for (i = 0; i < PASSWD_BTYELEN; i++)
     {
-        if ((u8buf[i] < 0x30) || (u8buf[i] > 0x39))
+        if ((u8buf[i] < '0') || (u8buf[i] > '9'))
         {
-            break;
+            if(i<PASSWD_BTYELEN){
+               
+                write_dgus_vp(0x535A, "\x00\x02", 1); //输入4位密码
+                G_Queue.showsuccse_time_ms = 1500;
+                return 0;
+            }
         }
     }
-
-    if (i >= 4)
-    {
-        return 1;
-    }
-    else
-    {
-        write_dgus_vp(0x535A, "\x00\x02", 1); //输入4位密码
-        G_Queue.showsuccse_time_ms = 1500;
-        return 0;
-    }
+    return 1;
+    // if (i >= 4)
+    // {
+    //     return 1;
+    // }
+    // else
+    // {
+    //     write_dgus_vp(0x535A, "\x00\x02", 1); //输入4位密码
+    //     G_Queue.showsuccse_time_ms = 1500;
+    //     return 0;
+    // }
 }
 
 uint8_t compare_passwd(uint8_t *buf)
@@ -1599,12 +1717,20 @@ void PageFunction(void)
 }
 
 // Program Size: data=144.0 xdata=5779 const=412 code=15418
+void UVC_Ctrl()
+{
+    if(G_Device_Ctrl.UVC.enable==1){
+        
+    }
+}
+
+
 
 void key_scanf(void)
 {
-    uint8_t u8buf[20];
+    uint8_t u8buf[64];
     uint16_t key_value, tmp;
-    int16_t temp;
+    // int16_t temp;
     read_dgus_vp(0x5300, (uint8_t *)&key_value, 1);
     if (key_value != 0)
     {
@@ -1782,7 +1908,7 @@ void key_scanf(void)
             break;
         case 0x401:
             read_dgus_vp(0x5380, u8buf, 3);
-            if (compare_passwd(u8buf))
+            if (compare_passwd(&u8buf[0]))
             {
                 SwitchPageById(5);
             }
@@ -1809,7 +1935,7 @@ void key_scanf(void)
             break;
         case 0x601: //加热-确定
             read_dgus_vp(HEATER_VP + 1, (uint8_t *)&G_Device_Ctrl.Heater.target_temp, 1);
-            Heater_On(G_Device_Ctrl.Heater.target_temp);
+            Heater_On((int16_t)G_Device_Ctrl.Heater.target_temp);
 
             break;
         case 0x602: //加热-取消
@@ -1886,11 +2012,14 @@ void key_scanf(void)
         case 0x504: //负离子开关
             if (G_Device_Ctrl.Anion.enable == 0U)
             {
-                Anion_On();
+                // Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,1);
+                Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,1);
+
             }
             else
             {
-                Anion_Off();
+                // Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,0);
+                Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable,ANION_CMDWORD,0);
             }
             break;
             //===============================负离子 end================================//
@@ -1922,19 +2051,19 @@ void key_scanf(void)
         case 0x506: //等离子开关
             if (G_Device_Ctrl.Plasma.enable == 0U)
             {
-                Plasma_On();
+                // Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,1);
+                Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,1);
             }
             else
             {
-                Plasma_Off();
+                // Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,0);
+                Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable,PLASMA_CMDWORD,0);
             }
             break;
             //===============================等离子 end================================//
             //===============================紫外消杀 start================================//
         case 0x507:
-            if(G_Device_Ctrl.UVC.lock_enable==0){
-                break;
-            }
+            
             SwitchPageById(11);
             break;
         case 0x1101:
@@ -1951,10 +2080,14 @@ void key_scanf(void)
             break;
         case 0x1202: //紫外消杀-取消
             // Clear_Input();
+            
             write_dgus_vp(UVC_VP + 1, (uint8_t *)&G_Device_Ctrl.UVC.running_time_h, 1);
             break;
         case 0x1301: //紫外消杀-中断
-            UVC_Off();
+            if(G_Device_Ctrl.UVC.lock_enable==0){
+                    write_dgus_vp(0xE8,"\x5A\x01\x00\x2D",2);//弹窗断锁
+                    G_Device_Ctrl.UVC.remind_flag=2;
+                }
 
             break;
         case 0x1501: //紫外消杀-密码确认
@@ -1962,14 +2095,24 @@ void key_scanf(void)
             read_dgus_vp(0x5360, u8buf, 3);
             if (compare_passwd(u8buf))
             {
-                UVC_On();
-                SwitchPageById(13);
+                //先跳提示锁确认
+                if(G_Device_Ctrl.UVC.lock_enable==0){
+                    write_dgus_vp(0xE8,"\x5A\x01\x00\x2C",2);//弹窗闭锁
+                    G_Device_Ctrl.UVC.remind_flag=1;
+                }
+                // UVC_On();
+                // 
+                //
             }
             else
             {
                 Set_Input(15, 1);
             }
 
+            break;
+            case 0x4401:
+                G_Device_Ctrl.UVC.remind_flag=0;
+                write_dgus_vp(0xE8,"\x00\x00",1);//弹窗断锁
             break;
             //===============================紫外消杀 end================================//
             //===============================滤芯 start================================//
@@ -2022,22 +2165,7 @@ void key_scanf(void)
             //===============================滤芯 end================================//
         case 0x2101: // 21页-确认
             read_dgus_vp(0x5126, (uint8_t *)&G_Device_Ctrl.Cfg.temp_uint, 1);
-            if (G_Device_Ctrl.Cfg.temp_uint == 1)
-            {
-                tmp = (uint16_t)(45 << 8) | 0;
-                write_dgus_vp(0x5800 + 7, (uint8_t *)&tmp, 1);
-
-                write_dgus_vp(0x5311, (uint8_t *)&G_Device_Ctrl.environment.temperature, 1);
-            }
-            else
-            {
-                tmp = (uint16_t)(6 << 8) | 0;
-                write_dgus_vp(0x5800 + 7, (uint8_t *)&tmp, 1);
-
-                temp = G_Device_Ctrl.environment.temperature * 9 / 5 + 32;
-                write_dgus_vp(0x5311, (uint8_t *)&temp, 1);
-            }
-            Start_Once_SaveData();
+            Set_Temperature_Unit(G_Device_Ctrl.Cfg.temp_uint);
             break;
         case 0x2102: // 21页-取消
             write_dgus_vp(0x5126, (uint8_t *)&G_Device_Ctrl.Cfg.temp_uint, 1);
@@ -2046,25 +2174,16 @@ void key_scanf(void)
             read_dgus_vp(LIGHT_ADD_SUB_VP, (uint8_t *)&tmp, 2);
             u8buf[0] = (uint8_t)(tmp);
             u8buf[1] = (uint8_t)(tmp);
-            write_dgus_vp(0x82, (uint8_t *)&u8buf, 2);
+            write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
 
             read_dgus_vp(SCREEN_MIN_VP, (uint8_t *)&G_Device_Ctrl.Cfg.off_display_time_min, 1);
             read_dgus_vp(SCREEN_SAVESTA_VP, (uint8_t *)&G_Device_Ctrl.Cfg.screen_save, 1);
-
+			G_Device_Ctrl.Cfg.off_display_flag = (uint8_t)G_Device_Ctrl.Cfg.screen_save & 0x0F;
             Start_Once_SaveData();
             break;
         case 0x2202: // 22页-显示-取消
             read_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
 
-            G_Device_Ctrl.Cfg.ligth_value = u8buf[0];
-            tmp = (uint16_t)G_Device_Ctrl.Cfg.ligth_value;
-            write_dgus_vp(LIGHT_ADD_SUB_VP, (uint8_t *)&tmp, 1); //真实亮度
-
-            tmp = (((uint16_t)(tmp - 20) * 125) / 100);     //范围20-100
-            write_dgus_vp(LIGHT_VALUE, (uint8_t *)&tmp, 1); // 1.25倍  20-0 60-50 100-100
-
-            tmp = ((uint16_t)G_Device_Ctrl.Cfg.ligth_value - 20) * 4.5; // 0-50  75-180  100-360
-            write_dgus_vp(LIGHT_NEEDLE_VP, (uint8_t *)&tmp, 1);         //指针
 
             write_dgus_vp(SCREEN_MIN_VP, (uint8_t *)&G_Device_Ctrl.Cfg.off_display_time_min, 1);
             write_dgus_vp(SCREEN_SAVESTA_VP, (uint8_t *)&G_Device_Ctrl.Cfg.screen_save, 1);
@@ -2104,20 +2223,21 @@ void key_scanf(void)
             {
             }
         case 0x2601:
-            read_dgus_vp(PASWD26_VP1, &u8buf[0], 18);
+            read_dgus_vp(PASWD26_VP1, &u8buf[0], 14);
 
             if (check_passwd_format(&u8buf[0]))
             {
-                if (check_passwd_format(&u8buf[6]))
+                if (check_passwd_format(&u8buf[10]))
                 {
-                    if (check_passwd_format(&u8buf[12]))
+                    if (check_passwd_format(&u8buf[20]))
                     {
                         if (0 == memcmp(&u8buf[0], &G_Device_Ctrl.Cfg.passwd[0], 4))
                         {
-                            if (0 == memcmp(&u8buf[6], &u8buf[12], 4))
+                            if (0 == memcmp(&u8buf[10], &u8buf[20], 4))
                             {
                                 //密码正确
-                                memcpy(G_Device_Ctrl.Cfg.passwd, &u8buf[6], 4);
+                                memcpy(G_Device_Ctrl.Cfg.passwd, &u8buf[10], 4);
+								SwitchPageById(20);
                                 Start_Once_SaveData();
                                 break;
                             }
@@ -2156,6 +2276,13 @@ void key_scanf(void)
             if (compare_passwd(u8buf))
             {
                 SwitchPageById(29);
+                memset(u8buf,0,32);
+                // 复制到备份
+                nor_flash_write(MAIN_ADDR, (uint8_t *)&u8buf, 8/2);
+                nor_flash_write(BACK_ADDR, (uint8_t *)&u8buf, 8/2);
+                nor_flash_write(MAIN_DATA_ADDR, (uint8_t *)&u8buf, DATALEN / 2);
+                nor_flash_write(BACK_DATA_ADDR, (uint8_t *)&u8buf, DATALEN / 2);
+                Flash_DataInit();
             }
             else
             {
@@ -2188,8 +2315,32 @@ void key_scanf(void)
             break;
         case 0x3201:
             //语言-确认
-            read_dgus_vp(0x535B, (uint8_t *)&G_Device_Ctrl.Cfg.language, 1);
-            Start_Once_SaveData();
+            read_dgus_vp(0x535B, (uint8_t *)&key_value, 1);
+            Language_Init(key_value);
+            // Start_Once_SaveData();
+            break;
+            case 0x200A:
+                //关机
+                Close_All_Dev();
+                G_Device_Ctrl.dev_enable = 0;
+                u8buf[0] = 0;
+                u8buf[1] = 0;
+                write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
+                
+                write_dgus_vp(0xE8,"\x5A\x00\x00\x00",2);
+                // delay_ms(50);
+                break;
+
+            case 0x2301:
+                read_dgus_vp(0x609,(uint8_t*)&key_value,1);
+                if(key_value==79){
+                    //立即更新
+                    SwitchPageById(25);
+                }
+            break;
+            case 0x2502:
+                    //退出更新
+
             break;
         default:
             break;
@@ -2199,28 +2350,35 @@ void key_scanf(void)
     }
 }
 
+/*
+brightness 0-100%
+*/
+void Set_Screen_Param(uint16_t brightness){
+    uint16_t tmp;
+    uint8_t u8buf[2];
+    G_Device_Ctrl.Cfg.ligth_value=(uint8_t)brightness;
+    write_dgus_vp(LIGHT_ADD_SUB_VP, (uint8_t *)&brightness, 1); //%
+    //系统显示亮度范围20-100
+    tmp=(uint16_t)G_Device_Ctrl.Cfg.ligth_value;
+
+    u8buf[0] = (uint8_t)tmp;
+    u8buf[1] = (uint8_t)tmp;
+    write_dgus_vp(0x82, (uint8_t *)&u8buf, 1); //真实亮度
+
+    tmp = (uint16_t)(G_Device_Ctrl.Cfg.ligth_value-20) * 4.5;// 0-50  75-180  100-360
+    write_dgus_vp(LIGHT_NEEDLE_VP, (uint8_t *)&tmp, 1); //指针
+    Start_Once_SaveData();
+}
+
 void SysCfg_Init()
 {
-    uint8_t u8buf[2];
-    uint16_t tmp, tmp2;
+    
+    
     Flash_DataInit();
-    sys_config(1, 0);
-    // write_dgus_vp(0xA0,"\x01\x01\x64\x00",2);
+    // sys_config(0, 0);
 
-    //系统显示
-    u8buf[0] = G_Device_Ctrl.Cfg.ligth_value;
-    u8buf[1] = G_Device_Ctrl.Cfg.ligth_value;
-    write_dgus_vp(0x82, (uint8_t *)&u8buf, 1); //亮度
-
-    tmp = (uint16_t)G_Device_Ctrl.Cfg.ligth_value;
-    write_dgus_vp(LIGHT_ADD_SUB_VP, (uint8_t *)&tmp, 1); //真实亮度
-
-    tmp2 = (((uint16_t)(tmp - 20) * 125) / 100);     //范围20-100
-    write_dgus_vp(LIGHT_VALUE, (uint8_t *)&tmp2, 1); // 1.25倍  20-0 60-50 100-100
-
-    tmp2 = (tmp - 20) * 4.5;                             // 0-50  75-180  100-360
-    write_dgus_vp(LIGHT_NEEDLE_VP, (uint8_t *)&tmp2, 1); //指针
-
+    Set_Screen_Param((uint16_t)G_Device_Ctrl.Cfg.ligth_value);
+    
     //息屏or屏保
     G_Device_Ctrl.Cfg.off_display_flag = (uint8_t)G_Device_Ctrl.Cfg.screen_save & 0x0F;
     //读取时间
@@ -2228,7 +2386,7 @@ void SysCfg_Init()
     G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
 
     
-    SwitchPageById(3);
+    // SwitchPageById(3);
 }
 
 //判断屏幕是否被触摸
@@ -2242,9 +2400,18 @@ uint8_t screen_touch(void)
     read_dgus_vp(SCREEN_TOUCH_ADDR, (uint8_t *)touch_data, 3);
     if ((touch_data[0] >> 8) == 0x5A)
     {
+        if(touch_data[0]&0x0001){
+            return 1;
+        }
+        else if(touch_data[0]&0x0002)
+        {
+           if (G_Device_Ctrl.dev_enable==0)
+           {
+                G_Device_Ctrl.dev_enable=1;
+           }
+        }
         rewrite[1] = touch_data[0] & 0xff;
         write_dgus_vp(SCREEN_TOUCH_ADDR, (uint8_t *)rewrite, 1);
-        return 1;
     }
     return 0;
 }
@@ -2252,7 +2419,7 @@ uint8_t screen_touch(void)
 void Sys_Cfg(void)
 {
     static uint16_t volume;
-    static uint16_t last_page;
+    // static uint16_t last_page;
     static uint8_t page_chage = 0;
     uint8_t u8buf[8];
     uint16_t tmp1, tmp2;
@@ -2260,16 +2427,30 @@ void Sys_Cfg(void)
     if (screen_touch())
     {
         G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
-        if (page_chage == 1)
+        if (page_chage == 1||G_Device_Ctrl.dev_enable==1)
         {
             page_chage = 0;
-            SwitchPageById(last_page);
+            if(G_Device_Ctrl.dev_enable=1){
+                SwitchPageById(3);
+                G_Device_Ctrl.dev_enable=2;
+            }
+            // SwitchPageById(last_page);
+            if(G_Device_Ctrl.UVC.remind_flag==1){
+                write_dgus_vp(0xE8,"\x5A\x01\x00\x2C",2);
+            }else if(G_Device_Ctrl.UVC.remind_flag==2){
+                write_dgus_vp(0xE8,"\x5A\x01\x00\x2D",2);
+            }else{
+                write_dgus_vp(0xE8,"\x00\x00",1);
+            }
             u8buf[0] = G_Device_Ctrl.Cfg.ligth_value;
             u8buf[1] = G_Device_Ctrl.Cfg.ligth_value;
             write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
             G_Device_Ctrl.Cfg.off_display_flag &= 0X0F;
         }
     }
+
+    if(G_Device_Ctrl.dev_enable==0)return;
+
     //读取系统亮度
     //触摸屏背光待机设置：
     // D3=开启亮度，0x00-0x64；背光待机控制关闭时，D3为软件亮度调节接口。
@@ -2278,17 +2459,7 @@ void Sys_Cfg(void)
     read_dgus_vp(LIGHT_ADD_SUB_VP, (uint8_t *)&tmp1, 1);
     if (tmp1 != (uint16_t)G_Device_Ctrl.Cfg.ligth_value)
     {
-        G_Device_Ctrl.Cfg.ligth_value = (uint8_t)tmp1;
-        tmp2 = (((uint16_t)(G_Device_Ctrl.Cfg.ligth_value - 20) * 125) / 100);
-        write_dgus_vp(LIGHT_VALUE, (uint8_t *)&tmp2, 1);
-
-        // read_dgus_vp(0x82, (uint8_t *)&u8buf, 2);
-        u8buf[0] = (uint8_t)(tmp1);
-        u8buf[1] = (uint8_t)(tmp1);
-        write_dgus_vp(0x82, (uint8_t *)&u8buf, 2);
-
-        tmp2 = (tmp1 - 20) * 4.5;
-        write_dgus_vp(LIGHT_NEEDLE_VP, (uint8_t *)&tmp2, 1); //指针
+        Set_Screen_Param(tmp1);
     }
 
     // volume
@@ -2305,17 +2476,20 @@ void Sys_Cfg(void)
         if (page_chage == 0)
         {
             page_chage = 1;
-            read_dgus_vp(0x14, (uint8_t *)&last_page, 1);
+            // read_dgus_vp(0x14, (uint8_t *)&last_page, 1);
+            // SwitchPageById(1);
+            write_dgus_vp(0xE8,"\x5A\x01\x00\x01",2);
+            write_dgus_vp(0x603,"\x00\x01",1);
+            G_Device_Ctrl.Cfg.off_display_flag &= 0x01;
+            G_Device_Ctrl.Cfg.off_display_flag |= 0x21;
+            G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
         }
-        SwitchPageById(1);
-        G_Device_Ctrl.Cfg.off_display_flag &= 0x01;
-        G_Device_Ctrl.Cfg.off_display_flag |= 0x21;
-        G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
         // G_Device_Ctrl.Cfg.off_display_flag|=0x32;
     }
     else if (G_Device_Ctrl.Cfg.off_display_flag == 0x31)
     {
-        SwitchPageById(2);
+        // write_dgus_vp(0xE8,"\x5A\x01\x00\x00",2);
+        write_dgus_vp(0x603,"\x00\x02",1);
         G_Device_Ctrl.Cfg.off_display_flag &= 0x01;
         G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
     }
@@ -2323,21 +2497,22 @@ void Sys_Cfg(void)
     {
         if (page_chage == 0)
         {
+            // read_dgus_vp(0x14, (uint8_t *)&last_page, 1);
             page_chage = 1;
-            read_dgus_vp(0x14, (uint8_t *)&last_page, 1);
+            u8buf[0] = 0;
+            u8buf[1] = 0;
+            write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
+            G_Device_Ctrl.Cfg.off_display_flag &= 0x02;
+            write_dgus_vp(0xE8,"\x5A\x01\x00\x00",2);
+            // write_dgus_vp(0x603,"\x00\x00",1);
         }
-        SwitchPageById(0);
-        u8buf[0] = 0;
-        u8buf[1] = 0;
-        write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
-        G_Device_Ctrl.Cfg.off_display_flag &= 0x02;
+        // SwitchPageById(0);
     }
 }
 
 //放入秒中断
 void Dev_Time_Check()
 {
-
     if(G_Device_Ctrl.Humidifier.sec){
         G_Device_Ctrl.Humidifier.sec--;
         if(G_Device_Ctrl.Humidifier.sec==0){
@@ -2349,8 +2524,6 @@ void Dev_Time_Check()
             }
         }
     }
-
-
 
     //判断紫外功能，如果开启则不进行其他设备的计时
     if (G_Device_Ctrl.UVC.enable == 1)
@@ -2387,7 +2560,7 @@ void Dev_Time_Check()
             }
             else if ((G_Device_Ctrl.Cfg.off_display_flag & 0xF2) == 0x02)
             {
-                G_Device_Ctrl.Cfg.off_display_flag |= 0x12;
+                G_Device_Ctrl.Cfg.off_display_flag |= 0x12;//
             }
         }
     }
@@ -2511,7 +2684,7 @@ void Dev_Aotu_Procese()
 
     if (G_Device_Ctrl.Heater.aotu_heater_en)
     {
-        if ((G_Device_Ctrl.environment.temperature + 5) < (int16_t)G_Device_Ctrl.Heater.target_temp)
+        if ((G_Device_Ctrl.environment.temperature + 2) < (int16_t)G_Device_Ctrl.Heater.target_temp)
         {
 
             if (G_Device_Ctrl.Heater.run_status != 2)
@@ -2520,7 +2693,7 @@ void Dev_Aotu_Procese()
                 Heater_On(G_Device_Ctrl.Heater.target_temp);
             }
         }
-        else if (G_Device_Ctrl.environment.temperature >= G_Device_Ctrl.Heater.target_temp) //环境温度大于等于当前温度
+        else if (G_Device_Ctrl.environment.temperature >= (int16_t)G_Device_Ctrl.Heater.target_temp) //环境温度大于等于当前温度
         {
             if (G_Device_Ctrl.Heater.run_status == 2)
             {
@@ -2561,11 +2734,11 @@ void Dev_Aotu_Procese()
 
 void STC_ReporData_Procese(uint32_t addr)
 {
-    uint16_t u16buf[32];
+    uint16_t u16buf[48];
     int16_t tmp;
-    if (addr < 0x6000 || addr > 0x601F)
+    if (addr < 0x6000 || addr > 0x602F)
         return;
-    read_dgus_vp(0x6000, (uint8_t *)&u16buf, 32);
+    read_dgus_vp(0x6000, (uint8_t *)&u16buf, 0x30);
 
     // GXHTC3温湿度传感器
     if (u16buf[2] == 0)
@@ -2592,6 +2765,7 @@ void STC_ReporData_Procese(uint32_t addr)
         else
         {
             //温度传感器都异常
+            G_Device_Ctrl.environment.temperature=0;
             G_Device_Ctrl.environment.NTC_err_sta = 1;
         }
     }
@@ -2625,15 +2799,17 @@ void STC_ReporData_Procese(uint32_t addr)
     //温度图标
     if ((G_Device_Ctrl.environment.GXHTC3_err_sta == 0&& G_Device_Ctrl.environment.NTC_err_sta == 0))
     {
-        write_dgus_vp(0x5310, "\x00\x00", 1);
+        write_dgus_vp(0x5310, "\x00\x00", 1);//不显示
     }
     else
     {
-        write_dgus_vp(0x5310, "\x00\x01", 1);
-        if(G_Device_Ctrl.Heater.enable!=0){
-            Heater_Off(0);//关闭加热
+        write_dgus_vp(0x5310, "\x00\x01", 1);//显示红色异常
+        //如果两个传感器都异常就关闭加热
+        if((G_Device_Ctrl.environment.GXHTC3_err_sta != 0) && (G_Device_Ctrl.environment.NTC_err_sta != 0)){
+            if(G_Device_Ctrl.Heater.enable!=0){
+                Heater_Off(0);//关闭加热
+            }
         }
-       
     }
 
     //湿度图标
@@ -2653,7 +2829,7 @@ void STC_ReporData_Procese(uint32_t addr)
     //显示温度
     if (G_Device_Ctrl.Cfg.temp_uint == 2)
     {
-        tmp = G_Device_Ctrl.environment.temperature * 9 / 5 + 32;
+        tmp = (G_Device_Ctrl.environment.temperature * 9 / 5) + 32;
     }
     else
     {
@@ -2692,12 +2868,32 @@ void STC_ReporData_Procese(uint32_t addr)
     if(u16buf[0x1F]==1){
         //允许打开紫外
         G_Device_Ctrl.UVC.lock_enable=1;
+        
+       
+        if(G_Device_Ctrl.UVC.remind_flag==1){
+            UVC_On();
+            G_Device_Ctrl.UVC.remind_flag=0;
+            write_dgus_vp(0xE8,"\x00\x00",1);//关弹窗
+        }else{
+            if(G_Device_Ctrl.UVC.enable==0&&G_Device_Ctrl.UVC.remind_flag!=2){
+                //如果意外断电需要弹窗关锁
+                write_dgus_vp(0xE8,"\x5A\x01\x00\x2D",2);//弹窗关锁
+                G_Device_Ctrl.UVC.remind_flag=2;
+            }
+        }
+
+
 
     }else{
         //禁止打开紫外
         G_Device_Ctrl.UVC.lock_enable=0;
         if(G_Device_Ctrl.UVC.enable==1){
             UVC_Off();
+        }
+        if(G_Device_Ctrl.UVC.remind_flag==2){
+            UVC_Off();
+            write_dgus_vp(0xE8,"\x00\x00",1);//关弹窗
+            G_Device_Ctrl.UVC.remind_flag=0;
         }
     }
 }
@@ -2946,11 +3142,12 @@ void Flash_DataInit(void)
             write_dgus_vp(0x5800 + 7, (uint8_t *)&tmp, 1);
         }
         //屏保&息屏
-        read_dgus_vp(0x82, u8buf, 1);
-        G_Device_Ctrl.Cfg.ligth_value = u8buf[0];
+        // read_dgus_vp(0x82, u8buf, 1);
+        G_Device_Ctrl.Cfg.ligth_value = 80;//默认80
         databuf[10] = (uint16_t )G_Device_Ctrl.Cfg.ligth_value;
         databuf[11] = G_Device_Ctrl.Cfg.screen_save = 1;
         databuf[12] = G_Device_Ctrl.Cfg.off_display_time_min = 1;
+        
         write_dgus_vp(SCREEN_SAVESTA_VP, (uint8_t *)&databuf[11], 1); //屏保&息屏
         write_dgus_vp(SCREEN_MIN_VP, (uint8_t *)&databuf[12], 1);     //屏保&息屏
 
@@ -2968,7 +3165,8 @@ void Flash_DataInit(void)
 
         //语言
         databuf[18] = G_Device_Ctrl.Cfg.language = 1;
-        write_dgus_vp(0x535B, (uint8_t *)&G_Device_Ctrl.Cfg.language, 1);
+       
+        Language_Init(databuf[18]);
 
         //滤芯提醒
         databuf[19] = G_Device_Ctrl.Humidifier.filter_remind_month = 2;
@@ -2988,6 +3186,8 @@ void Flash_DataInit(void)
         nor_flash_write(MAIN_DATA_ADDR+((uint32_t)sector_idx*0x800), (uint8_t *)&databuf, DATALEN / 2);
         nor_flash_write(BACK_DATA_ADDR+((uint32_t)sector_idx*0x800), (uint8_t *)&databuf, DATALEN / 2);
         err_sta = 4;
+
+        SwitchPageById(49);
     }
     else if (crc1 == 1 || crc2 == 1)
     {
@@ -3064,9 +3264,9 @@ void Flash_DataInit(void)
         memcpy(&G_Device_Ctrl.Cfg.passwd[0], &databuf[16], 4);
 
         //语言
-        G_Device_Ctrl.Cfg.language = databuf[18];
-        write_dgus_vp(0x535B, (uint8_t *)&G_Device_Ctrl.Cfg.language, 1);
-
+        // G_Device_Ctrl.Cfg.language = databuf[18];
+        // write_dgus_vp(0x535B, (uint8_t *)&G_Device_Ctrl.Cfg.language, 1);
+        Language_Init(databuf[18]);
         //滤芯提醒
         G_Device_Ctrl.Humidifier.filter_remind_month = databuf[19];
         G_Device_Ctrl.Humidifier.hour=databuf[20];
@@ -3076,16 +3276,15 @@ void Flash_DataInit(void)
         write_dgus_vp(0x5349, (uint8_t *)&G_Device_Ctrl.Humidifier.filter_remind_month, 1);
 
         cur_save_cnt=*(uint32_t*)&databuf[28];//存储次数
+        SwitchPageById(3);
     }
     // UartSendData(&Uart2,&G_Device_Ctrl.Cfg.passwd[0],4);
-
-    
 }
 
 void Start_Once_SaveData()
 {
     G_Device_Ctrl.Cfg.save_flag = 1;
-    G_Device_Ctrl.Cfg.save_interval_times = 4;
+    G_Device_Ctrl.Cfg.save_interval_times = 2;
 }
 
 void Flash_SaveData()
@@ -3172,11 +3371,11 @@ void Updata_Vpdata_To_Report()
 {
     uint16_t databuf[64];
     databuf[0] = G_Device_Ctrl.Cfg.temp_uint;
-    databuf[1] = (((uint16_t)(G_Device_Ctrl.Cfg.ligth_value - 20) * 125) / 100);
+    databuf[1] = (uint16_t)G_Device_Ctrl.Cfg.ligth_value;
     databuf[2] = G_Device_Ctrl.Cfg.off_display_time_min;
     databuf[3] = G_Device_Ctrl.Cfg.screen_save;
     databuf[4] = G_Device_Ctrl.Cfg.volume;
-    databuf[5] = G_Device_Ctrl.Cfg.ligth_value;
+    databuf[5] = G_Device_Ctrl.Cfg.language;
     write_dgus_vp(0x3000, (uint8_t *)&databuf[0], 6);
 
     *(float *)&databuf[0] = ((float)G_Device_Ctrl.environment.temperaturex10 / 10);
@@ -3313,7 +3512,31 @@ void AlarmCode_Updata(){
 }
 
 
+/*
+ @brief 设置温度单位
+ @param Unit 1=°C   2=°F
+*/
+void Set_Temperature_Unit(uint16_t Unit)
+{
+    uint16_t tmp,temp;
+    G_Device_Ctrl.Cfg.temp_uint=Unit;
+    if (G_Device_Ctrl.Cfg.temp_uint == 1)
+    {
+        tmp = (uint16_t)(45 << 8) | 0;
+        write_dgus_vp(0x5800 + 7, (uint8_t *)&tmp, 1);
 
+        write_dgus_vp(0x5311, (uint8_t *)&G_Device_Ctrl.environment.temperature, 1);
+    }
+    else
+    {
+        tmp = (uint16_t)(6 << 8) | 0;
+        write_dgus_vp(0x5800 + 7, (uint8_t *)&tmp, 1);
+
+        temp = G_Device_Ctrl.environment.temperature * 9 / 5 + 32;
+        write_dgus_vp(0x5311, (uint8_t *)&temp, 1);
+    }
+    Start_Once_SaveData();
+}
 
 
 
@@ -3322,4 +3545,26 @@ void Mult_Task()
     AlarmCode_Updata();
     Updata_Vpdata_To_Report();
     PageFunction();
+}
+
+
+void Language_Init(uint16_t language_tpye)
+{
+    uint8_t i=0;
+    uint8_t buf[2];
+  
+    if(language_tpye==0||language_tpye>4)return;
+    write_dgus_vp(0x535B, (uint8_t *)&language_tpye, 1);
+    if(language_tpye!=G_Device_Ctrl.Cfg.language)
+    {
+        G_Device_Ctrl.Cfg.language=language_tpye;
+        Start_Once_SaveData();
+        buf[0]=55+((G_Device_Ctrl.Cfg.language-1)*5);
+        buf[1]=0;
+        write_dgus_vp(0x5400, (uint8_t*)&buf, 1);
+        
+        for(i=0;i<6;i++){
+            write_dgus_vp(0x5417+((uint16_t)i*0x10),(uint8_t*)&buf,1);//55
+        }
+    } 
 }

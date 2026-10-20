@@ -52,7 +52,6 @@ void main(void)
 
 	// SysTaskAdd(8, 1, key_scanf);
 
-
 	while(1)
 	{
 		SysTaskRun();

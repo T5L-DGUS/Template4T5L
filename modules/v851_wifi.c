@@ -186,15 +186,20 @@ static void V851WifiHandleKey(uint16_t key)
 void V851WifiInit(void)
 {
     uint8_t page_bytes[14];
-
-    FlashToDgus(flashMAIN_BLOCK_ORDER,V851_WIFI_PAGE_CONFIG_ADDR,V851_WIFI_PAGE_CONFIG_ADDR,8);
+//
+//    FlashToDgus(flashMAIN_BLOCK_ORDER,V851_WIFI_PAGE_CONFIG_ADDR,V851_WIFI_PAGE_CONFIG_ADDR,8);
     memset(&v851_wifi_page, 0, sizeof(v851_wifi_page));
 
-    read_dgus_vp(V851_WIFI_PAGE_CONFIG_ADDR, page_bytes, 7U);
-    memcpy(&v851_wifi_page, page_bytes, sizeof(page_bytes));
-    read_dgus_vp(V851_WIFI_LIST_CONFIG_ADDR,
-                 (uint8_t *)&v851_wifi_page.wifi_start_addr, 1U);
-    // v851_wifi_page.wifi_start_addr=0x1900;
+//    read_dgus_vp(V851_WIFI_PAGE_CONFIG_ADDR, page_bytes, 7U);
+//    memcpy(&v851_wifi_page, page_bytes, sizeof(page_bytes));
+//    read_dgus_vp(V851_WIFI_LIST_CONFIG_ADDR,
+//                 (uint8_t *)&v851_wifi_page.wifi_start_addr, 1U);
+	v851_wifi_page.scan_flag=0x5A;
+    v851_wifi_page.scan_page=41;
+    v851_wifi_page.detail_flag=0x5A;
+    v851_wifi_page.detail_page=41;
+	
+    v851_wifi_page.wifi_start_addr=0x1900;
     v851_wifi_page_offset = 0U;
 }
 
@@ -242,8 +247,8 @@ static void V851WifiHandleScanResult(const uint8_t *frame, uint16_t len)
     V851WifiClearList();
     if((len < 6U) || (frame[5] != 0x01U))
     {
-        V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
-                                v851_wifi_page.scan_page);
+        // V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
+        //                         v851_wifi_page.scan_page);
         return;
     }
     if((len > 6U) && (frame[6] == '\n'))
@@ -252,8 +257,8 @@ static void V851WifiHandleScanResult(const uint8_t *frame, uint16_t len)
         {
             --v851_wifi_page_offset;
         }
-        V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
-                                v851_wifi_page.scan_page);
+        // V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
+        //                         v851_wifi_page.scan_page);
         return;
     }
 
@@ -279,8 +284,8 @@ static void V851WifiHandleScanResult(const uint8_t *frame, uint16_t len)
         }
         ++offset;
     }
-    V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
-                            v851_wifi_page.scan_page);
+    // V851WifiSwitchIfEnabled(v851_wifi_page.scan_flag,
+    //                         v851_wifi_page.scan_page);
 }
 
 void V851WifiReceiveFrame(const uint8_t *frame, uint16_t len)
