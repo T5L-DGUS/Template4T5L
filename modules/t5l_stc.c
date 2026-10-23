@@ -2275,6 +2275,9 @@ void key_scanf(void)
             read_dgus_vp(0x5366, u8buf, 3);
             if (compare_passwd(u8buf))
             {
+#if v851PROTOCOL_ENABLED
+                V851ProtocolRequestFactoryReset();
+#endif
                 SwitchPageById(29);
                 memset(u8buf,0,32);
                 // 复制到备份

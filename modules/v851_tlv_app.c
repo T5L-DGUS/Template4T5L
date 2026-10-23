@@ -129,7 +129,60 @@ const V851BootstrapResult *V851BootstrapResultGet(void)
     return &v851_bootstrap_result;
 }
 
-/* Single project hook for Bootstrap and structures without a DGUS mapping. */
+#define V851_FIRMWARE_CURRENT_VP                 0x5290U
+#define V851_FIRMWARE_LATEST_VP                  0x52A0U
+#define V851_FIRMWARE_VP_WORDS                   16U
+
+static void V851FirmwareApplySegment(const V851TlvSegment *segment)
+{
+    V851TlvFieldCursor cursor;
+    V851TlvField field;
+    V851TlvIterResult result;
+    uint16_t address;
+    uint16_t length;
+    uint8_t text[V851_FIRMWARE_VP_WORDS * 2U];
+
+    /* Validate before writing, including when the application hook is called directly. */
+    V851TlvFieldCursorInit(&cursor, segment->payload, segment->length);
+    do
+    {
+        result = V851TlvFieldNext(&cursor, &field);
+    } while(result == V851_TLV_ITER_FIELD);
+    if(result != V851_TLV_ITER_END)
+    {
+        return;
+    }
+
+    V851TlvFieldCursorInit(&cursor, segment->payload, segment->length);
+    while(V851TlvFieldNext(&cursor, &field) == V851_TLV_ITER_FIELD)
+    {
+        if(field.tag == V851_TLV_TAG_FW_VERSION)
+        {
+            address = V851_FIRMWARE_CURRENT_VP;
+        }
+        else if(field.tag == V851_TLV_TAG_LATEST_FW_VERSION)
+        {
+            address = V851_FIRMWARE_LATEST_VP;
+        }
+        else
+        {
+            continue;
+        }
+        memset(text, 0, sizeof(text));
+        length = field.length;
+        if(length >= sizeof(text))
+        {
+            length = sizeof(text) - 1U;
+        }
+        if(length != 0U)
+        {
+            memcpy(text, field.value, length);
+        }
+        write_dgus_vp(address, text, V851_FIRMWARE_VP_WORDS);
+    }
+}
+
+/* Single project hook for Bootstrap and firmware display. */
 void V851TlvApplicationSegment(uint8_t command,
                                const V851TlvSegment *segment)
 {
@@ -138,6 +191,12 @@ void V851TlvApplicationSegment(uint8_t command,
        (segment->struct_type == V851_TLV_STRUCT_BOOTSTRAP_RESULT))
     {
         V851BootstrapApplySegment(segment);
+    }
+    else if((command == V851_TLV_CMD_PROPERTY) &&
+            (segment != NULL) &&
+            (segment->struct_type == V851_TLV_STRUCT_FIRMWARE))
+    {
+        V851FirmwareApplySegment(segment);
     }
 }
 

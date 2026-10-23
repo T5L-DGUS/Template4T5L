@@ -5,6 +5,7 @@
 #include "timer.h"
 #include "uart.h"
 #include "v851_control_info.h"
+#include "v851_wifi.h"
 
 #include <string.h>
 
@@ -52,6 +53,7 @@ static uint32_t v851_state_scan_tick;
 static uint32_t v851_state_full_tick;
 
 static uint8_t v851_factory_report_pending;
+static uint8_t v851_factory_reset_pending;
 static uint16_t xdata v851_alarm_current[V851_ALARM_VP_COUNT];
 static uint16_t xdata v851_alarm_reported[V851_ALARM_VP_COUNT];
 static uint8_t v851_alarm_next_index;
@@ -300,7 +302,8 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
        ((command != V851_TLV_CMD_PROPERTY) &&
         (command != V851_TLV_CMD_FACTORY) &&
         (command != V851_TLV_CMD_SNAPSHOT) &&
-         (command != V851_TLV_CMD_EVENT_ALARM)) ||
+         (command != V851_TLV_CMD_EVENT_ALARM) &&
+         (command != V851_TLV_CMD_FACTORY_RESET)) ||
        (v851_tlv_tx_count >= V851_TLV_TX_DEPTH))
     {
         return 0U;
@@ -319,7 +322,9 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
         if(((command == V851_TLV_CMD_FACTORY) &&
             (segments[index].struct_type != V851_TLV_STRUCT_FACTORY_DEVICE)) ||
            ((command == V851_TLV_CMD_EVENT_ALARM) &&
-            (segments[index].struct_type != V851_TLV_STRUCT_EVENT_ALARM)))
+            (segments[index].struct_type != V851_TLV_STRUCT_EVENT_ALARM)) ||
+           ((command == V851_TLV_CMD_FACTORY_RESET) &&
+            (segments[index].struct_type != V851_TLV_STRUCT_FACTORY_RESET)))
         {
             return 0U;
         }
@@ -545,6 +550,71 @@ static uint16_t V851ProtocolQueueStateMask(uint8_t command,
         return included_mask;
     }
     return 0U;
+}
+
+void V851ProtocolRequestFactoryReset(void)
+{
+    uint8_t read_slot;
+    uint8_t write_slot;
+    uint8_t index;
+    uint8_t kept;
+
+    /* Compact the ring, retaining scan requests but removing old credentials. */
+    read_slot = v851_wifi_tx_tail;
+    write_slot = read_slot;
+    kept = 0U;
+    for(index = 0U; index < v851_wifi_tx_count; ++index)
+    {
+        if(v851_wifi_tx[read_slot][4] != V851_WIFI_CMD_CONNECT)
+        {
+            if(write_slot != read_slot)
+            {
+                memcpy(v851_wifi_tx[write_slot], v851_wifi_tx[read_slot],
+                       v851_wifi_tx_len[read_slot]);
+            }
+            v851_wifi_tx_len[write_slot] = v851_wifi_tx_len[read_slot];
+            write_slot = (uint8_t)((write_slot + 1U) % V851_WIFI_TX_DEPTH);
+            ++kept;
+        }
+        read_slot = (uint8_t)((read_slot + 1U) % V851_WIFI_TX_DEPTH);
+    }
+    v851_wifi_tx_head = write_slot;
+    v851_wifi_tx_count = kept;
+    for(index = kept; index < V851_WIFI_TX_DEPTH; ++index)
+    {
+        memset(v851_wifi_tx[write_slot], 0, V851_WIFI_TX_MAX);
+        v851_wifi_tx_len[write_slot] = 0U;
+        write_slot = (uint8_t)((write_slot + 1U) % V851_WIFI_TX_DEPTH);
+    }
+    V851WifiClearCredentials();
+    v851_factory_reset_pending = 1U;
+}
+
+static uint8_t V851ProtocolServiceFactoryReset(void)
+{
+    V851TlvSegment segment;
+    uint8_t fields[4];
+    uint16_t offset;
+
+    if(v851_factory_reset_pending == 0U)
+    {
+        return 0U;
+    }
+    offset = 0U;
+    if(V851TlvWriteU8(fields, sizeof(fields), &offset,
+                      V851_TLV_TAG_RESET_ACTION,
+                      V851_TLV_RESET_WIFI_AND_UNBIND) != 0U)
+    {
+        segment.struct_type = V851_TLV_STRUCT_FACTORY_RESET;
+        segment.payload = fields;
+        segment.length = offset;
+        if(V851ProtocolSendSegments(V851_TLV_CMD_FACTORY_RESET,
+                                     &segment, 1U) != 0U)
+        {
+            v851_factory_reset_pending = 0U;
+        }
+    }
+    return 1U;
 }
 
 void V851ProtocolRequestFactoryReport(void)
@@ -842,6 +912,7 @@ void V851ProtocolInit(void)
     v851_wifi_tx_count = 0U;
     v851_state_dirty_mask = 0U;
     v851_factory_report_pending = 0U;
+    v851_factory_reset_pending = 0U;
     memset(v851_alarm_current, 0, sizeof(v851_alarm_current));
     memset(v851_alarm_reported, 0, sizeof(v851_alarm_reported));
     v851_alarm_next_index = 0U;
@@ -856,7 +927,8 @@ void V851ProtocolTask(void)
     uint32_t tick;
 
     tick = GetSysTick();
-    if(V851ProtocolServiceAlarm(tick) == 0U)
+    if((V851ProtocolServiceFactoryReset() == 0U) &&
+       (V851ProtocolServiceAlarm(tick) == 0U))
     {
         if(V851ProtocolServiceFactory() == 0U)
         {

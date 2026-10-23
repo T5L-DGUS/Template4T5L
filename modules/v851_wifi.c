@@ -183,6 +183,15 @@ static void V851WifiHandleKey(uint16_t key)
     }
 }
 
+void V851WifiClearCredentials(void)
+{
+    memset(v851_wifi_clear_buffer, 0, sizeof(v851_wifi_clear_buffer));
+    write_dgus_vp(V851_WIFI_PASSWORD_ADDR, v851_wifi_clear_buffer,
+                  V851_WIFI_SSID_MAX / 2U);
+    /* Consume any connect key that has not reached the Wi-Fi task yet. */
+    write_dgus_vp(V851_WIFI_KEY_ADDR, v851_wifi_clear_buffer, 1U);
+}
+
 void V851WifiInit(void)
 {
     uint8_t page_bytes[14];
