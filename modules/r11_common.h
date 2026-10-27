@@ -167,9 +167,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define keyMP4_NEXT_VIDEO           0x003A
 #define keyMP4_TOGGLE_PAUSE         0x003B
 #define VIDEO_UI_MAX_FILES         5
-#define VIDEO_IDLE_TIMEOUT_MS      30000UL
-
-void R11VideoTouchTask(uint8_t allow_start);
+void R11VideoTouchTask(uint16_t touch);
 uint8_t R11VideoIdleActive(void);
 uint16_t R11VideoIdleReturnPage(void);
 uint8_t R11VideoWakeBlocked(void);

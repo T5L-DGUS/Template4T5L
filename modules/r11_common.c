@@ -506,20 +506,17 @@ void R11VideoPlayerProcess(void)
 }
 
 
-/* Local video UI and touch-inactivity advertising. No FW page/command writes. */
+/* Manual video UI. No inactivity-triggered playback or FW command writes. */
 static uint16_t xdata video_ui_page=0xffff, video_ui_pending, video_ui_target;
 static uint8_t xdata video_ui_enter, video_ui_known, video_ui_query, video_title_dirty, video_resume_fallback, video_next_due;
 static uint32_t xdata video_ui_sent;
 /* Query: 0 not sent, 1 waiting, 2 received, 3 timed out (late reply allowed).
  * R11 does not acknowledge a T5L 0x90 loop setting: track transmission only. */
 static uint8_t xdata video_loop_sent;
-static uint16_t xdata video_idle_return=42, video_idle_seen=0xffff;
-/* Entry ownership survives page-readback delay and R11 restart. Only an
- * explicit fullscreen key on page 120 may use 120 as its return target. */
+/* Only an explicit fullscreen key on page 120 sets the return target. */
 static uint16_t xdata video_full_origin=0xffff;
-static uint8_t xdata video_idle_entering;
-static uint8_t xdata video_idle_active, video_idle_started, video_touch_down, video_wake_pending, video_wake_guard;
-static uint32_t xdata video_idle_at, video_wake_at;
+static uint8_t xdata video_touch_down, video_wake_guard;
+static uint32_t xdata video_wake_at;
 static uint32_t VideoTime(void)
 {
     uint32_t t; uint8_t enabled=ET0; ET0=0; t=GetSysTick(); ET0=enabled; return t;
@@ -552,79 +549,33 @@ static void VideoPlayFileKey(uint16_t key)
     video_ui_pending=cmdMP4_PLAY; video_ui_target=slot; video_ui_sent=VideoTime();
     video_next_due=0; VideoVp(VIDEO_UI_STATUS_ADDR,1);
 }
-static uint8_t VideoIdlePage(uint16_t p)
-{
-    return p==1 || p==2 || p==27 || p==42;
-}
+/* Compatibility queries: automatic advertising is disabled. */
 uint8_t R11VideoIdleActive(void)
 {
-    return (video_idle_active || VideoIdlePage(video_full_origin)) && ReadPageId()==121;
+    return 0;
 }
-uint16_t R11VideoIdleReturnPage(void) { return video_idle_return; }
+uint16_t R11VideoIdleReturnPage(void) { return 42; }
 uint8_t R11VideoWakeBlocked(void) { return video_wake_guard; }
 static void VideoIdleDismiss(void)
 {
-    uint16_t target=VideoIdlePage(video_full_origin)?video_full_origin:video_idle_return;
-    if(!VideoIdlePage(target)) target=42;
-    video_full_origin=0xffff; video_idle_entering=0;
-    video_idle_active=0; video_wake_pending=0; video_wake_guard=1;
-    video_idle_at=video_wake_at=VideoTime();
+    video_full_origin=0xffff; video_wake_guard=1;
+    video_wake_at=VideoTime();
     video_ui_enter=0; video_next_due=0;
-    /* Wake always pauses and returns directly to the originating business page. */
+    /* A fullscreen session without a manual origin returns to the home gate. */
     VideoSend(cmdMP4_PAUSE,0);
     VideoVp(0x0600,0); VideoVp(0x3710,0);
-    video_idle_seen=target;
-    SwitchPageById(target);
+    SwitchPageById(42);
 }
-/* Called at 10 ms from the FW task, independent of the 100 ms R11 scanner.
- * DGUS 0x0016: 5A01 press, 5A03 held, 5A02 release; clear update flag after read. */
-void R11VideoTouchTask(uint8_t allow_start)
+/* TP_Status is read and cleared once by the FW task, then shared here. */
+void R11VideoTouchTask(uint16_t touch)
 {
     uint32_t now=VideoTime();
-    uint16_t touch=VideoGet(sysDGUS_TP_STATUS),p=ReadPageId();
     uint8_t updated=(touch>>8)==0x5a, state=(uint8_t)touch;
-    if(!video_idle_started) { video_idle_started=1; video_idle_at=now; }
-    if(p==121 && VideoIdlePage(video_full_origin)) {
-        video_idle_active=1; video_idle_entering=0;
-    }
-    if(video_idle_active && p!=121) {
-        /* The switch command may complete before the current-page VP changes.
-         * Do not discard the first entry's return context during that gap. */
-        if(video_idle_entering && p==video_idle_return && now-video_idle_at<1000UL) return;
-        video_idle_active=video_idle_entering=0; video_full_origin=0xffff;
-        video_wake_pending=0; video_idle_at=now;
-    }
-    if(p!=video_idle_seen) { video_idle_seen=p; video_idle_at=now; }
-    if(updated) {
-        VideoVp(sysDGUS_TP_STATUS,0);
-        if(state<=3) {
-            video_idle_at=now;
-            if(state==1 || state==3) video_touch_down=1;
-            else video_touch_down=0;
-            if(video_idle_active) {
-                video_wake_pending=1;
-                /* Return on release: the wake touch cannot hit the underlying page. */
-                if(!video_touch_down) { VideoIdleDismiss(); return; }
-            }
-        }
-    }
+    if(updated && state<=3) video_touch_down=state==1 || state==3;
     if(video_wake_guard) {
         VideoVp(0x0600,0); VideoVp(0x3710,0);
-        if(video_touch_down) video_idle_at=video_wake_at=now;
+        if(video_touch_down) video_wake_at=now;
         else if(now-video_wake_at>=200UL) video_wake_guard=0;
-        return;
-    }
-    if(video_touch_down) { video_idle_at=now; return; }
-    if(VideoGet(0x3710) || VideoGet(0x0600)) video_idle_at=now;
-    if(video_idle_active) return;
-    /* Only these business/settings pages participate in idle advertising. */
-    if(!allow_start || !VideoIdlePage(p) || video_init_process!=VIDEO_PROCESS_COMPLETE) { video_idle_at=now; return; }
-    if(now-video_idle_at>=VIDEO_IDLE_TIMEOUT_MS) {
-        video_idle_return=p; video_idle_active=1; video_wake_pending=0;
-        video_full_origin=p; video_idle_entering=1; video_idle_at=now;
-        video_ui_enter=1; video_ui_query=0; video_resume_fallback=0;
-        video_idle_seen=121;
-        SwitchPageById(121);
     }
 }
 static void VideoFullFailure(void)
@@ -638,7 +589,7 @@ static void VideoFullFailure(void)
 void R11VideoUiReset(void)
 {
     uint8_t empty[MAX_MP3_NAME_LEN];
-    /* Preserve idle return context across an R11 restart. */
+    /* Preserve the manual fullscreen origin across an R11 restart. */
     video_ui_page=0xffff; video_ui_pending=video_ui_enter=video_ui_known=video_ui_query=0;
     video_loop_sent=0;
     VideoVp(VIDEO_UI_STATUS_ADDR,2); VideoVp(VIDEO_UI_COUNT_ADDR,0); VideoVp(VIDEO_UI_BUTTON_ADDR,2);
@@ -774,25 +725,19 @@ static void VideoMediaChanged(void)
 }
 static uint8_t VideoUiKey(uint16_t key)
 {
-    uint16_t count=VideoCount(),next,touch;
+    uint16_t count=VideoCount(),next;
     uint8_t filekey=(key>=keyMP4_1FILE && key<=keyMP4_5FILE);
     if(key!=keyMP4_PREVIOUS_VIDEO && key!=keyMP4_NEXT_VIDEO && key!=keyMP4_TOGGLE_PAUSE &&
        key!=keyMP4_IMG_SET_BIG && key!=keyMP4_IMG_SET_SMALL && key!=keyMP4_PAUSE && key!=keyMP4_REPLAY && !filekey) return 0;
     if(R11VideoWakeBlocked()) return 1;
     if(key==keyMP4_IMG_SET_SMALL) {
-        if(R11VideoIdleActive()) {
-            /* The R11 scan may run just before the 10 ms touch task. */
-            touch=VideoGet(sysDGUS_TP_STATUS);
-            if((touch>>8)==0x5a && ((uint8_t)touch==1 || (uint8_t)touch==3)) video_touch_down=1;
-            video_wake_pending=1; if(!video_touch_down) VideoIdleDismiss();
-        }
-        else VideoFullFailure();
+        VideoFullFailure();
         return 1;
     }
     if(ReadPageId()!=120 && ReadPageId()!=121) return 1;
     if(key==keyMP4_IMG_SET_BIG) {
         if(count && ReadPageId()==120) {
-            video_full_origin=120; video_idle_active=video_idle_entering=0;
+            video_full_origin=120;
             SwitchPageById(121);
         }
         return 1;

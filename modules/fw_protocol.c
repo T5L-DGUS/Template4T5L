@@ -1,6 +1,8 @@
 #ifdef FW_PROTOCOL_TEST
 #include "fw_test_platform.h"
 #else
+/* Keep the UI state machine within the existing T5L code-memory banks. */
+#pragma OPTIMIZE(8,SIZE)
 #include "fw_protocol.h"
 #include "modbus.h"
 #include "timer.h"
@@ -75,6 +77,10 @@ static uint8_t xdata pass_enabled, pass_set, pass_authorized, pass_mode, pass_le
 static uint8_t xdata pass_draft_set, pass_saved_enable, pass_saved_set, pass_notify, force_page_write;
 static uint32_t xdata pass_value, pass_draft, pass_saved, pass_input, pass_first;
 static uint16_t xdata pass_origin, pass_target, start_submit_page;
+static uint32_t xdata pass_touch_at, pass_guard_at;
+static uint8_t xdata pass_touch_down, pass_touch_guard;
+/* Preserve the original home action until its actual bus submission. */
+static uint16_t xdata home_event, home_target;
 static void UiSubmit(uint16_t address,uint16_t value);
 static void PassDraft(void);
 static void PassInit(void);
@@ -264,7 +270,22 @@ static uint8_t UiCondition(uint8_t item)
 static uint8_t UiCommandReason(uint16_t key)
 {
     uint8_t c;
-    if(key==1 || key==3 || key==7 || key==38 || key==42 || key==43 || key==44) return 0;
+    uint16_t mode;
+    if(key==4 || key==50 || key==3 || key==38) {
+        if(offline || !Valid(39)) return 1;
+        mode=FwGet(FW_MIRROR_VP+39);
+        if(key==38) return mode==3?0:6;
+        if(!Valid(41)) return 1;
+        if(FwGet(FW_MIRROR_VP+41)) return 3;
+        if(key==3) return mode==0 || mode==3?0:6;
+        if(key==4 && mode!=0 && mode!=2 && mode!=3) return 6;
+        if(key==50) {
+            if(mode!=0) return 6;
+            if(!Valid(30)) return 1;
+            if((int16_t)FwGet(FW_MIRROR_VP+30)>=100) return 4;
+        }
+    }
+    if(key==1 || key==7 || key==42 || key==43 || key==44) return 0;
     if(offline || !Valid(42)) return 1;
     if(FwGet(FW_MIRROR_VP+42)&1) return 5;
     if(key!=40 && key!=51) return 0;
@@ -273,6 +294,37 @@ static uint8_t UiCommandReason(uint16_t key)
     if(key==51) { c=UiCondition(2); if(c!=1) return c==2?1:4; }
     if(key==40 && (!Valid(44) || !(FwGet(FW_MIRROR_VP+44)&128))) return Valid(44)?6:1;
     return 0;
+}
+/* target=0 means a machine key; nonzero means navigation only. */
+static uint8_t UiHomeAction(uint16_t e, uint16_t *target)
+{
+    uint16_t mode;
+    *target=0;
+    if(e==0x0227 || e==0x0203 || e==0x0103 || e==0x0126) {
+        if(offline || !Valid(39)) return 0;
+        mode=FwGet(FW_MIRROR_VP+39);
+        if(e==0x0227 || e==0x0203) {
+            if(!Valid(82) || FwGet(FW_MIRROR_VP+82)!=1) return 0;
+            if(mode==0) *target=e==0x0227?39:3;
+            else if(e==0x0227 && mode==4) *target=40;
+            else if(e==0x0203 && mode==6) *target=4;
+            return *target!=0;
+        }
+        if(mode==2) { *target=12; return 1; }
+        if(e==0x0126) {
+            if(mode==4) { *target=40; return 1; }
+            if(mode==6) { *target=4; return 1; }
+        }
+    }
+    if((e>>8)==1) return !UiCommandReason(e&255);
+    return 1;
+}
+static void UiCancelAction(void)
+{
+    FwSet(FW_WRITE_TRIGGER_VP,0);
+    ui_write=0; nav_target=0; start_submit_page=0; force_page_write=0;
+    home_event=home_target=0;
+    FwSet(FW_UI_RESULT_VP,3); FwSet(FW_WRITE_RESULT_VP,3);
 }
 static void PassMask(void)
 {
@@ -302,6 +354,7 @@ static void PassInit(void)
 {
     pass_enabled=pass_set=pass_authorized=pass_mode=pass_length=0;
     pass_value=pass_input=pass_first=0; force_page_write=0; start_submit_page=0;
+    pass_touch_at=pass_guard_at=FwNow(); pass_touch_down=pass_touch_guard=0;
 #ifndef FW_PROTOCOL_TEST
     FlashToDgus(flashMAIN_BLOCK_ORDER,FW_UI_PASS_RECORD,FW_UI_PASS_RECORD,8);
 #endif
@@ -328,22 +381,25 @@ static uint8_t PassCommit(void)
        FwGet(FW_UI_PASS_RECORD+3)!=pass_saved_set ||
        FwGet(FW_UI_PASS_RECORD+4)!=(uint16_t)(pass_saved>>16) ||
        FwGet(FW_UI_PASS_RECORD+5)!=(uint16_t)pass_saved) return 0;
+    if(!pass_enabled) { pass_authorized=1; pass_touch_at=FwNow(); }
     pass_enabled=pass_saved_enable; pass_set=pass_saved_set; pass_value=pass_saved;
     /* Saving within an authenticated settings session does not re-lock it. */
-    pass_authorized=1; return 1;
+    return 1;
 }
 static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
 {
-    pass_origin=ReadPageId(); if(pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=9;
+    pass_origin=ReadPageId(); if(pass_origin==0 || pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=1;
+    if(mode==1) target=42;
     pass_mode=mode; pass_target=target; pass_notify=notify; pass_length=0; pass_input=pass_first=0;
     FwSet(FW_UI_PASS_STATE,mode==1?0:1); PassMask(); FwSet(FW_UI_EVENT_VP,0);
     SwitchPageById(FW_UI_PASS_PAGE);
 }
 static void UiNavigate(uint16_t target)
 {
-    if(target==6 || target==9 || target==12 || target==30) pass_authorized=0;
+    if(target==1) target=42;
     if((target==1 || target==42) && pass_enabled && !pass_authorized) {
-        if(ReadPageId()!=FW_UI_PASS_PAGE || pass_mode!=1) PassOpen(1,target,0);
+        if(ReadPageId()==1) return;
+        if(ReadPageId()!=FW_UI_PASS_PAGE || pass_mode!=1) PassOpen(1,42,1);
         return;
     }
     pass_mode=0; pass_input=pass_first=0; pass_length=0; PassMask();
@@ -366,13 +422,45 @@ static void PassEvent(uint16_t e)
         } else if(pass_input!=pass_value) FwSet(FW_UI_PASS_STATE,3);
         else if(offline || !Valid(16)) { FwSet(FW_UI_PASS_STATE,6); return; }
         else {
-            pass_authorized=1;
+            pass_authorized=1; pass_touch_at=FwNow();
             if(pass_notify) { nav_target=pass_target; force_page_write=1; UiSubmit(16,pass_target); }
             else UiNavigate(pass_target);
         }
         pass_input=0; pass_length=0;
     }
     PassMask();
+}
+/* The FW task owns TP_Status. Video receives the same sampled event. */
+static void PassTouchTask(uint16_t touch,uint32_t now)
+{
+    uint16_t p=ReadPageId();
+    uint8_t state=(uint8_t)touch, updated=(touch>>8)==0x5a && state<=3;
+    if(updated) {
+        pass_touch_down=state==1 || state==3;
+        pass_touch_at=now;
+    }
+    if(pass_touch_down) pass_touch_at=now;
+    if(pass_enabled && pass_authorized && now-pass_touch_at>=FW_UI_PASS_TIMEOUT_MS) {
+        pass_authorized=0;
+        if(p==42) {
+            if(home_event && command!=6) UiCancelAction();
+            FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
+            SwitchPageById(1); p=1;
+        }
+    }
+    if(pass_touch_guard) {
+        FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
+        if(pass_touch_down) pass_guard_at=now;
+        else if(now-pass_guard_at>=200UL) pass_touch_guard=0;
+        return;
+    }
+    if(p==1) {
+        FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
+        if(!pass_enabled || pass_authorized) UiNavigate(42);
+        else if(updated) {
+            PassOpen(1,42,1); pass_touch_guard=1; pass_guard_at=now;
+        }
+    } else if(p==42 && pass_enabled && !pass_authorized) PassOpen(1,42,1);
 }
 static void LocalTask(uint32_t now)
 {
@@ -483,6 +571,7 @@ static void UiAfterReply(uint16_t address, uint16_t value)
         if(ui_write && command==3 && (nav_target || start_submit_page)) {
             FwSet(FW_WRITE_TRIGGER_VP,0); ui_write=0; nav_target=start_submit_page=0;
             force_page_write=0; FwSet(FW_UI_RESULT_VP,3);
+            home_event=home_target=0;
             if(pass_mode==1) pass_authorized=0;
         }
         if(UiPage(value) && ReadPageId()!=value) UiNavigate(value);
@@ -575,6 +664,7 @@ static void FwFinish(uint16_t error)
     if(error) {
         if(pass_mode==1) { pass_authorized=0; FwSet(FW_UI_PASS_STATE,6); }
         force_page_write=0; start_submit_page=0;
+        home_event=home_target=0;
         local_save=0;
         /* Never replay a failed write; recovery performs reads only. */
         refresh_active = refresh_pending = range_index = 0;
@@ -605,7 +695,7 @@ static void FwFinish(uint16_t error)
         refresh_active = 0;
         refreshed_at=FwNow(); offline=0;
     }
-    if(command==6) { force_page_write=0; start_submit_page=0; }
+    if(command==6) { force_page_write=0; start_submit_page=0; home_event=home_target=0; }
     command = 0;
     UiDisplay();
 }
@@ -721,12 +811,14 @@ void FwProtocolInit(void)
     save_count=save_index=ui_write=alarm_cursor=hardness_ready=temp_limits_ready=0; editing=UiSettingsPage(last_page);
     FwSet(FW_UI_HARDNESS_VP,0);
     fw_page=0xffff; return_page=42; operation_page=42; nav_target=warning_submit_page=0;
+    home_event=home_target=0;
     for(i=0;i<sizeof(edit_valid);i++) edit_valid[i]=0;
     for(i = FW_WRITE_ADDR_VP; i <= FW_ERROR_VP; ++i) FwSet(i, 0);
     for(i = USB_VIDEO_VP; i <= USB_SOFTWARE_GO_VP; ++i) FwSet(i, 0);
     for(i = 0; i <= 88; ++i) FwSet(FW_MIRROR_VP + i, 0);
     for(i=FW_UI_EVENT_VP;i<FW_UI_LIVE_VP;i++) FwSet(i,0);
     PassInit(); LocalInit();
+    if(pass_enabled) { PassOpen(1,42,1); pass_origin=1; }
     UiDisplay();
 }
 
@@ -763,10 +855,11 @@ static void UiSubmit(uint16_t address,uint16_t value)
 }
 static void UiEvent(void)
 {
-    uint16_t e=FwGet(FW_UI_EVENT_VP), p=ReadPageId(), v, target;
+    uint16_t e=FwGet(FW_UI_EVENT_VP), p=ReadPageId(), v, target, resolved=0;
     uint8_t i,a,n,good;
     if(!e) return;
     FwSet(FW_UI_EVENT_VP,0);
+    if(p==1 || pass_touch_guard) return;
     if((e>>8)==5) { PassEvent(e); return; }
     if(p==FW_UI_PASS_PAGE) return;
     if((e>>8)!=1 && (e>>8)!=2 && (e<0x0300 || e>0x0303) && (e<0x0400 || e>0x0405)) return;
@@ -795,18 +888,25 @@ static void UiEvent(void)
         if(!ui_write && !save_count) FwSet(FW_UI_RESULT_VP,3);
         return;
     }
+    if(p==42 && ((e>>8)==1 || (e>>8)==2)) {
+        if((pass_enabled && !pass_authorized) || !UiHomeAction(e,&resolved)) {
+            FwSet(FW_UI_RESULT_VP,3); return;
+        }
+        home_event=e; home_target=resolved;
+        if(resolved) e=0x0200|resolved;
+    }
     if((e>>8)==1) {
         v=e&255;
-        if((pass_enabled && !pass_authorized) || UiCommandReason(v) ||
-           (v==38 && (!Valid(44) || !(FwGet(FW_MIRROR_VP+44)&4))) ||
-           (v==40 && !(FwGet(FW_MIRROR_VP+44)&128))) { FwSet(FW_UI_RESULT_VP,3); return; }
+        if(UiCommandReason(v) ||
+           (v==40 && !(FwGet(FW_MIRROR_VP+44)&128))) { home_event=home_target=0; FwSet(FW_UI_RESULT_VP,3); return; }
         if(UiKey(v)) { if(v==40 || v==51) start_submit_page=p; UiSubmit(14,v); }
         else FwSet(FW_UI_RESULT_VP,3);
     } else if((e>>8)==2) {
         target=e&255;
-        if(target==0) target=UiWarningPage(p)?operation_page:return_page;
-        if((target==1 || target==42) && pass_enabled && !pass_authorized) { PassOpen(1,target,1); return; }
-        if(p==9 && target==1) force_page_write=1;
+        if(target==0) target=(p==4 || p==40)?42:(UiWarningPage(p)?operation_page:return_page);
+        if(target==1) target=42;
+        if(target==42 && pass_enabled && !pass_authorized) { home_event=home_target=0; PassOpen(1,42,1); return; }
+        if(p==9 && target==42) force_page_write=1;
         if(UiPage(target)) { if(!UiSettingsPage(p)) return_page=p; nav_target=target; UiSubmit(16,target); }
     } else if(e==0x0300 && editing) {
         UiHardness();
@@ -870,11 +970,12 @@ static void UiEvent(void)
             if(alarm_keys[v-1] && Valid(41+(a>=16)) && (FwGet(FW_MIRROR_VP+41+(a>=16)) & (1U<<(a&15)))) UiSubmit(14,alarm_keys[v-1]);
         }
     }
+    if(!ui_write) home_event=home_target=0;
 }
 
 void FwProtocolTask(void)
 {
-    uint16_t trigger, address, value, page;
+    uint16_t trigger, address, value, page, touch, resolved;
     uint8_t alarm_reg,alarm_bit,alarm_key;
     uint32_t now = FwNow();
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
@@ -895,15 +996,14 @@ void FwProtocolTask(void)
         FwFinish(FW_ERR_TIMEOUT);
         rx_size = 0;
     }
+    touch=FwGet(0x0016);
+    if((touch>>8)==0x5a) FwSet(0x0016,0);
+    PassTouchTask(touch,now);
 #if sysADVERTISE_MODE_ENABLED
-    R11VideoTouchTask(!ui_write && !save_count && command!=6 && !FwGet(FW_WRITE_TRIGGER_VP));
+    R11VideoTouchTask(touch);
 #endif
     page = UiLogicalPage();
-    if((page==1 || page==42) && pass_enabled && !pass_authorized) {
-        PassOpen(1,page,0); page=FW_UI_PASS_PAGE;
-    }
     if(page != last_page) {
-        if(page==6 || page==9 || page==12 || page==30) pass_authorized=0;
         /* Local overlays/player do not trigger extra business reads. */
         if(!offline && UiSettingsPage(page)) refresh_pending = 1;
         editing=UiSettingsPage(page) || (page==FW_UI_PASS_PAGE && pass_mode>=2);
@@ -934,9 +1034,13 @@ void FwProtocolTask(void)
         FwSet(FW_WRITE_TRIGGER_VP, 0);
         address = FwGet(FW_WRITE_ADDR_VP);
         value = FwGet(FW_WRITE_VALUE_VP);
+        if(home_event && (page!=42 || (pass_enabled && !pass_authorized) ||
+           !UiHomeAction(home_event,&resolved) || resolved!=home_target)) {
+            UiCancelAction(); return;
+        }
         if(address==14 && (UiCommandReason(value) ||
            (start_submit_page && page!=start_submit_page))) {
-            start_submit_page=0; ui_write=0;
+            UiCancelAction();
             if(timer_owner) { timer_owner=0; timer_wait=0; timer_fault=1; }
             FwSet(FW_UI_RESULT_VP,3); FwSet(FW_WRITE_RESULT_VP,3); return;
         }
@@ -953,6 +1057,7 @@ void FwProtocolTask(void)
             if(timer_owner) { timer_owner=0; timer_fault=1; }
             local_save=0;
             force_page_write=0; start_submit_page=0;
+            home_event=home_target=0;
             FwSet(FW_WRITE_RESULT_VP, 3);
             FwSet(FW_ERROR_VP, command ? FW_ERR_BUSY : FW_ERR_VALUE);
             if(ui_write) { ui_write=0; save_count=save_index=0; nav_target=0; FwSet(FW_UI_RESULT_VP,3); }
@@ -972,6 +1077,7 @@ void FwProtocolTask(void)
                 if(save_count) ++save_index;
                 if(save_index>=save_count) { save_count=save_index=0; if(local_save) local_save=2; FwSet(FW_UI_RESULT_VP,2); }
                 ui_write=0;
+                home_event=home_target=0;
             }
         } else {
             request_address = address; request_value = value;

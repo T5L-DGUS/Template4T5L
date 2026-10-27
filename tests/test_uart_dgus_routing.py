@@ -1,8 +1,9 @@
-"""Run production UART parsers with simulated UART rings and DGUS memory.
+"""Run production UART parsers and manual video controls with simulated IO.
 
 Requires CLANG, LLVM_LINK and LLI (or the LLVM tools on PATH).
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -116,6 +117,67 @@ int main(void) {
                             str(path / 'test.c'), '-o', str(path / 'test.bc')], check=True)
             subprocess.run([os.environ.get('LLI', sibling('lli')),
                             '--force-interpreter=true', str(path / 'test.bc')], check=True)
+
+
+class ManualVideoTest(unittest.TestCase):
+    def test_no_idle_playback_and_manual_controls(self):
+        source = (ROOT / 'modules/r11_common.c').read_text(encoding='utf-8')
+        header = (ROOT / 'modules/r11_common.h').read_text(encoding='utf-8')
+        defines = '\n'.join(line for line in header.splitlines()
+                            if re.match(r'#define (keyMP4_|cmdMP4_|VIDEO_UI_STATUS_ADDR)', line))
+        harness = '#include <stdint.h>\n' + defines + r'''
+static uint16_t page=42, video_full_origin=0xffff, video_ui_pending;
+static uint8_t video_touch_down,video_wake_guard,video_ui_enter,video_next_due,video_ui_known,video_ui_query;
+static uint32_t tick,video_wake_at;
+static struct { uint8_t state; uint16_t now_play_serial; } r11_player;
+static uint16_t count=2, last_command, last_file;
+static unsigned sends,switches;
+static uint32_t VideoTime(void) {return tick;}
+static uint16_t ReadPageId(void) {return page;}
+static void SwitchPageById(uint16_t p) {page=p;++switches;}
+static void VideoVp(uint16_t a,uint16_t v) {(void)a;(void)v;}
+static uint16_t VideoCount(void) {return count;}
+static void VideoSend(uint8_t c,uint16_t v) {(void)v;last_command=c;++sends;}
+static void VideoPlayFileKey(uint16_t k) {last_file=k;++sends;}
+'''
+        for name in ('R11VideoIdleActive', 'R11VideoIdleReturnPage', 'R11VideoWakeBlocked',
+                     'VideoIdleDismiss', 'R11VideoTouchTask', 'VideoFullFailure', 'VideoUiKey'):
+            harness += '\n' + function(source, name) + '\n'
+        harness += r'''
+#define CHECK(c) do {if(!(c))return __LINE__;}while(0)
+int main(void) {
+ uint16_t pages[]={1,2,27,42,9,120,121},i;
+ for(i=0;i<7;i++) {
+  page=pages[i];tick+=30000;R11VideoTouchTask(0);
+  tick+=60000;R11VideoTouchTask(0);
+  CHECK(page==pages[i] && sends==0 && switches==0 && !R11VideoIdleActive());
+ }
+ CHECK(R11VideoIdleReturnPage()==42);
+ page=120;VideoUiKey(keyMP4_IMG_SET_BIG);CHECK(page==121 && video_full_origin==120);
+ R11VideoTouchTask(0x5a01);R11VideoTouchTask(0x5a02);CHECK(page==121);
+ VideoUiKey(keyMP4_IMG_SET_SMALL);CHECK(page==120 && sends==0);
+ r11_player.state=1;VideoUiKey(keyMP4_TOGGLE_PAUSE);CHECK(last_command==cmdMP4_PAUSE);
+ r11_player.state=4;VideoUiKey(keyMP4_TOGGLE_PAUSE);CHECK(last_command==cmdMP4_REPLAY);
+ video_ui_known=1;r11_player.now_play_serial=0;VideoUiKey(keyMP4_NEXT_VIDEO);CHECK(last_file==keyMP4_1FILE+1);
+ VideoUiKey(keyMP4_1FILE);CHECK(last_file==keyMP4_1FILE);
+ count=0;VideoUiKey(keyMP4_IMG_SET_BIG);CHECK(page==120);
+ page=121;video_full_origin=0xffff;VideoFullFailure();CHECK(page==42 && last_command==cmdMP4_PAUSE);
+ CHECK(R11VideoWakeBlocked());R11VideoTouchTask(0x5a01);tick+=1000;R11VideoTouchTask(0x5a03);
+ CHECK(R11VideoWakeBlocked());R11VideoTouchTask(0x5a02);tick+=200;R11VideoTouchTask(0);
+ CHECK(!R11VideoWakeBlocked());
+ return 0;
+}
+'''
+        compiler = os.environ.get('CLANG', 'clang')
+        sibling = str(Path(compiler).with_name('lli.exe' if os.name == 'nt' else 'lli'))
+        with tempfile.TemporaryDirectory(prefix='manual-video-') as directory:
+            path = Path(directory)
+            (path / 'test.c').write_text(harness, encoding='utf-8')
+            subprocess.run([compiler, '-std=c99', '-Wall', '-Wextra', '-Werror',
+                            '-ffreestanding', '-fno-builtin', '-emit-llvm', '-c',
+                            str(path / 'test.c'), '-o', str(path / 'test.bc')], check=True)
+            subprocess.run([os.environ.get('LLI', sibling), '--force-interpreter=true',
+                            str(path / 'test.bc')], check=True)
 
 
 if __name__ == '__main__':

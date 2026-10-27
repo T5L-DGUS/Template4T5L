@@ -37,6 +37,8 @@
 #define FW_UI_PASS_SET     0x3836
 #define FW_UI_PASS_RECORD  0x3840
 #define FW_UI_PASS_PAGE    142
+#define FW_UI_RUN_EVENT    0x0104
+#define FW_UI_PASS_TIMEOUT_MS 60000UL
 #define USB_VIDEO_VP       0x3780
 #define USB_SOFTWARE_VP    0x3781
 #define USB_COMPLETE_VP    0x3782
