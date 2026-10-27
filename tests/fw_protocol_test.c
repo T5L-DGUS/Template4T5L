@@ -142,7 +142,7 @@ static void test_initial_and_poll(void) {
  reset();CHECK(vp[FW_UI_READY_VP]==0);CHECK(text_is(0x3720,"--"));event(0x0101);CHECK(requests[0].command==3);
  finish_snapshot();CHECK(request_count==15);CHECK(vp[FW_UI_READY_VP]==1);
  CHECK(text_is(0x3724,"0.0"));CHECK(vp[FW_MIRROR_VP+3]==0);
- before=request_count;advance(999);CHECK(request_count==before);advance(1);finish_snapshot();CHECK(request_count==before+7);
+ before=request_count;advance(999);CHECK(request_count==before);advance(1);finish_snapshot();CHECK(request_count==before+9);
  for(i=before;i<request_count;i++)CHECK(requests[i].command==3 && requests[i].address!=0);
 }
 static void test_units_signed_and_bounds(void) {
@@ -192,7 +192,7 @@ static void test_pages_local_and_unknown(void) {
  unsigned before;
  online();event(0x0400);CHECK(page==120);before=request_count;FwProtocolTask();CHECK(request_count==before);
  advance(1000);finish_snapshot();CHECK(page==120);device[16]=88;advance(1000);finish_snapshot();CHECK(page==120);
- device[16]=9;advance(1000);finish_snapshot();CHECK(page==9);event(0x0278);CHECK(page==9);CHECK(request_count==before+21);
+ device[16]=9;advance(1000);finish_snapshot();CHECK(page==9);event(0x0278);CHECK(page==9);CHECK(request_count==before+27);
  event(0x0400);event(0x0401);CHECK(page==9);
  event(0x022a);CHECK(page==9);reply();CHECK(page==42);
 }
@@ -297,10 +297,122 @@ static void test_idle_keeps_edit_session_and_blocks_wake_action(void) {
  wake_blocked=0;FwProtocolTask();CHECK(vp[FW_EDIT_VP]==21);
  event(0x0300);CHECK(requests[request_count-1].address==0 && requests[request_count-1].value==21);
 }
+static void refresh_device(void) { advance(1000);finish_snapshot();advance(100); }
+static void pass_digits(const char *s) { while(*s)event(0x0510+(uint16_t)(*s++-'0')); }
+static void configure_password(void) {
+ go(2);event(0x0500);CHECK(page==FW_UI_PASS_PAGE);
+ pass_digits("001234");CHECK(text_is(FW_UI_PASS_MASK,"******"));event(0x0521);
+ CHECK(vp[FW_UI_PASS_STATE]==2);pass_digits("001234");event(0x0521);CHECK(page==2);
+ vp[FW_UI_PASS_ENABLE]=1;event(0x0300);FwProtocolTask();CHECK(vp[FW_UI_RESULT_VP]==2);
+}
+static void test_start_conditions(void) {
+ static const int16_t temperatures[]={-1,0,19,20};
+ unsigned i,before;
+ for(i=0;i<4;i++) {
+  online();device[30]=(uint16_t)temperatures[i];device[37]=0;device[16]=3;refresh_device();
+  CHECK(vp[FW_UI_CHECK_VP]==(i==0));CHECK(vp[FW_UI_CHECK_VP+2]==(i<3));
+  before=request_count;event(0x0133);CHECK(request_count==before+(i==0));
+  if(i==0)CHECK(requests[request_count-1].address==14 && requests[request_count-1].value==51);
+  online();device[30]=(uint16_t)temperatures[i];device[37]=1;device[16]=3;refresh_device();
+  CHECK(vp[FW_UI_CHECK_VP]==1);before=request_count;event(0x0133);CHECK(request_count==before+(i<3));
+ }
+ online();device[37]=1;device[16]=39;refresh_device();before=request_count;event(0x0128);
+ CHECK(request_count==before+1 && requests[before].value==40);CHECK(page==39);
+ reply();FwProtocolTask();finish_snapshot();CHECK(page==39);
+ online();device[37]=1;device[16]=39;device[44]=0;refresh_device();before=request_count;event(0x0128);
+ CHECK(request_count==before && vp[FW_UI_REASON_VP]==6);
+}
+static void test_alarm_and_lid_gates(void) {
+ static const uint16_t masks[]={0x60d7,0x7763};unsigned r,b,before;
+ for(r=0;r<2;r++)for(b=0;b<16;b++) {
+  online();device[37]=1;device[16]=3;device[41+r]=(uint16_t)(1U<<b);refresh_device();
+  CHECK(vp[FW_UI_CHECK_VP+1]==(!(masks[r]&(1U<<b))));before=request_count;event(0x0133);
+  CHECK(request_count==before+(!(masks[r]&(1U<<b))));
+ }
+ online();device[37]=1;device[41]=0x81;device[42]=0x1001;refresh_device();CHECK(vp[FW_UI_LID_VP]==1);
+ before=request_count;event(0x0102);CHECK(request_count==before);submit(14,50);CHECK(request_count==before);
+ event(0x011b);CHECK(request_count==before);event(0x0101);CHECK(request_count==before+1);
+ reply();FwProtocolTask();finish_snapshot();event(0x0202);CHECK(requests[request_count-1].address==16);
+ reply();FwProtocolTask();finish_snapshot();device[42]=0;refresh_device();CHECK(vp[FW_UI_LID_VP]==0);
+ online();device[37]=1;refresh_device();advance(1000);advance(500);before=request_count;event(0x0133);
+ CHECK(request_count==before && vp[FW_UI_CHECK_VP]==2);
+}
+static void test_queued_start_recheck(void) {
+ unsigned before;
+ online();device[37]=1;device[16]=3;refresh_device();
+ advance(1000);reply();FwProtocolTask();reply();FwProtocolTask();
+ CHECK(requests[request_count-1].address==30);before=request_count;event(0x0133);
+ CHECK(request_count==before);device[30]=20;reply();FwProtocolTask();
+ CHECK(request_count==before && vp[FW_UI_RESULT_VP]==3);
+ online();device[37]=1;device[16]=3;refresh_device();advance(1000);reply();FwProtocolTask();
+ before=request_count;event(0x0133);device[16]=19;reply();FwProtocolTask();
+ CHECK(page==19);CHECK(request_count==before+1 && requests[before].command==3);
+}
+static void test_password_settings_and_persistence(void) {
+ unsigned before;uint16_t record[8];unsigned i;
+ online();go(2);vp[FW_UI_PASS_ENABLE]=1;event(0x0300);CHECK(vp[FW_UI_RESULT_VP]==3);
+ event(0x0500);pass_digits("123");event(0x0521);CHECK(vp[FW_UI_PASS_STATE]==5);
+ event(0x0522);CHECK(page==2);event(0x0500);pass_digits("123456");event(0x0521);
+ pass_digits("123457");event(0x0521);CHECK(page==142 && vp[FW_UI_PASS_STATE]==4);
+ event(0x0522);event(0x0301);reply();FwProtocolTask();finish_snapshot();CHECK(vp[FW_UI_PASS_ENABLE]==0);
+ configure_password();CHECK(vp[FW_UI_PASS_RECORD]==0x5057);CHECK(vp[FW_UI_PASS_RECORD+5]==1234);
+ for(i=0;i<8;i++)record[i]=vp[FW_UI_PASS_RECORD+i];
+ event(0x0500);pass_digits("999999");event(0x0521);pass_digits("999999");event(0x0521);
+ event(0x0301);reply();FwProtocolTask();finish_snapshot();CHECK(vp[FW_UI_PASS_RECORD+5]==1234);
+ for(i=0;i<8;i++)CHECK(record[i]==vp[FW_UI_PASS_RECORD+i]);
+ FwProtocolInit();FwProtocolTask();finish_snapshot();CHECK(page==142);
+ before=request_count;pass_digits("1234");event(0x0521);CHECK(page==142 && request_count==before);
+ event(0x0522);CHECK(page==9);event(0x0201);CHECK(page==142);
+ pass_digits("009999");event(0x0521);CHECK(vp[FW_UI_PASS_STATE]==3 && request_count==before);
+ pass_digits("001235");event(0x0520);event(0x0514);event(0x0521);
+ CHECK(requests[request_count-1].address==16 && requests[request_count-1].value==1 && page==142);
+ before=request_count;event(0x0521);CHECK(request_count==before);
+ reply();FwProtocolTask();finish_snapshot();CHECK(page==1);
+ go(3);event(0x0200);reply();FwProtocolTask();finish_snapshot();CHECK(page==1);
+ go(9);event(0x0201);CHECK(page==142);
+}
+static void test_password_host_and_navigation(void) {
+ unsigned before;
+ online();page=9;FwProtocolTask();before=request_count;event(0x0201);
+ CHECK(request_count==before+1 && requests[before].address==16 && page==9);
+ reply();FwProtocolTask();finish_snapshot();CHECK(page==1);
+ configure_password();go(9);device[16]=42;refresh_device();CHECK(page==142);
+ before=request_count;event(0x0102);CHECK(request_count==before);
+ pass_digits("001234");event(0x0521);CHECK(page==42 && request_count==before);
+ idle_return=42;idle_active=1;page=121;FwProtocolTask();idle_active=0;page=42;FwProtocolTask();CHECK(page==42);
+ go(12);event(0x0200);CHECK(page==142);event(0x0522);CHECK(page==12);
+ event(0x0200);pass_digits("001234");event(0x0521);exception();CHECK(page==142 && vp[FW_UI_PASS_STATE]==6);
+ advance(3000);finish_snapshot();pass_digits("001234");event(0x0521);reply();FwProtocolTask();finish_snapshot();CHECK(page==42);
+ go(9);event(0x0201);device[16]=10;device[42]=0x4000;refresh_device();CHECK(page==10);
+}
+static void test_password_draft_and_timer_lid(void) {
+ unsigned before;uint16_t original;
+ online();go(2);vp[FW_EDIT_VP+5]=(uint16_t)-60;vp[0x37A1]=1;
+ event(0x0500);pass_digits("000000");event(0x0521);pass_digits("000000");event(0x0521);
+ FwProtocolTask();finish_snapshot();CHECK(page==2 && vp[FW_EDIT_VP+5]==(uint16_t)-60 && vp[0x37A1]==1);
+ vp[FW_UI_PASS_ENABLE]=1;event(0x0300);CHECK(requests[request_count-1].address==5);
+ CHECK(vp[FW_UI_PASS_RECORD]==0);exception();CHECK(vp[FW_UI_PASS_RECORD]==0);
+ advance(3000);finish_snapshot();event(0x0300);reply();FwProtocolTask();finish_snapshot();FwProtocolTask();
+ CHECK(vp[FW_UI_PASS_RECORD+2]==1 && vp[FW_UI_PASS_RECORD+3]==1 && vp[FW_UI_PASS_RECORD+5]==0);
+ original=vp[FW_UI_PASS_RECORD+6];vp[FW_UI_PASS_ENABLE]=0;event(0x0301);reply();FwProtocolTask();finish_snapshot();
+ CHECK(vp[FW_UI_PASS_RECORD+2]==1 && vp[FW_UI_PASS_RECORD+6]==original);
+ online();go(2);vp[0x37A0]=1;vp[0x37A1]=0;vp[0x37A2]=1;event(0x0300);FwProtocolTask();
+ device[39]=3;device[82]=1;device[37]=1;device[42]=1;refresh_device();
+ before=request_count;advance(61000);finish_snapshot();
+ CHECK(device[14]==0 && vp[0x37A4]==5);
+ while(before<request_count) {CHECK(requests[before].command!=6 || requests[before].address!=14);++before;}
+ device[42]=0;refresh_device();CHECK(device[14]==40);
+}
 int main(void) {
  void (*tests[])(void)={test_initial_and_poll,test_units_signed_and_bounds,test_edit_refresh_cancel,test_save_snapshot_and_repeat,test_partial_failure_and_recovery,test_read_timeout_cancels_queued_action,test_no_command_retry_and_fast_clicks,test_pages_local_and_unknown,test_alarm_mapping,test_warning_pages_and_return,test_warning_clear_fixed_mapping,test_warning_clear_invalid_and_timeout,test_warning_clear_queued_page_change,test_component_gates_and_noops,test_parser_split_crc_and_deadline,test_usb_independent};
  unsigned i;for(i=0;i<sizeof(tests)/sizeof(tests[0]);i++){tests[i]();if(failed_line){printf("FAIL scenario %u line %u\n",i+1,failed_line);return 1;}}
  test_result_belongs_to_original_page();if(failed_line){printf("FAIL page result line %u\n",failed_line);return 1;}++i;
  test_idle_keeps_edit_session_and_blocks_wake_action();if(failed_line){printf("FAIL idle edit line %u\n",failed_line);return 1;}++i;
+ test_start_conditions();if(failed_line){printf("FAIL conditions line %u\n",failed_line);return 1;}++i;
+ test_alarm_and_lid_gates();if(failed_line){printf("FAIL gates line %u\n",failed_line);return 1;}++i;
+ test_queued_start_recheck();if(failed_line){printf("FAIL recheck line %u\n",failed_line);return 1;}++i;
+ test_password_settings_and_persistence();if(failed_line){printf("FAIL password line %u\n",failed_line);return 1;}++i;
+ test_password_host_and_navigation();if(failed_line){printf("FAIL password navigation line %u\n",failed_line);return 1;}++i;
+ test_password_draft_and_timer_lid();if(failed_line){printf("FAIL drafts/timer line %u\n",failed_line);return 1;}++i;
  printf("FW: %u scenarios, %u assertions passed\n",i,checks);return 0;
 }

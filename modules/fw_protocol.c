@@ -71,6 +71,16 @@ static uint16_t hardness_seen, hardness_limit_seen;
 static uint8_t hardness_ready;
 static uint16_t temp_low_seen, temp_high_seen;
 static uint8_t temp_limits_ready;
+static uint8_t xdata pass_enabled, pass_set, pass_authorized, pass_mode, pass_length;
+static uint8_t xdata pass_draft_set, pass_saved_enable, pass_saved_set, pass_notify, force_page_write;
+static uint32_t xdata pass_value, pass_draft, pass_saved, pass_input, pass_first;
+static uint16_t xdata pass_origin, pass_target, start_submit_page;
+static void UiSubmit(uint16_t address,uint16_t value);
+static void PassDraft(void);
+static void PassInit(void);
+static uint8_t PassCommit(void);
+static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify);
+static void UiNavigate(uint16_t target);
 
 static uint32_t FwNow(void)
 {
@@ -183,6 +193,7 @@ static void LocalDraft(void)
     FwSet(LOCAL_ENABLE,timer_enabled);
     FwSet(LOCAL_HOURS,timer_minutes/60);
     FwSet(LOCAL_MINS,timer_minutes%60);
+    PassDraft();
 }
 static uint16_t LocalChecksum(uint16_t enabled, uint16_t minutes)
 {
@@ -201,11 +212,11 @@ static void LocalInit(void)
     timer_enabled=0; timer_minutes=1440;
 #ifndef FW_PROTOCOL_TEST
     FlashToDgus(flashMAIN_BLOCK_ORDER,LOCAL_RECORD,LOCAL_RECORD,6);
+#endif
     if(LocalRecordValid()) {
         timer_enabled=(uint8_t)FwGet(LOCAL_RECORD+2);
         timer_minutes=FwGet(LOCAL_RECORD+3);
     }
-#endif
     timer_fault=timer_wait=timer_owner=timer_running=local_save=0;
     timer_elapsed=0; timer_at=FwNow(); local_display_at=timer_at-100UL;
     brightness=100; FwSet(LOCAL_LIGHT,100); FwSet(0x0082,0x6464);
@@ -216,6 +227,7 @@ static void LocalCommit(void)
 {
     uint16_t sum;
     local_save=0;
+    if(!PassCommit()) { FwSet(FW_UI_RESULT_VP,3); return; }
     if(saved_enable==timer_enabled && saved_minutes==timer_minutes) return;
     sum=LocalChecksum(saved_enable,saved_minutes);
     FwSet(LOCAL_RECORD,0x5343); FwSet(LOCAL_RECORD+1,1);
@@ -224,13 +236,143 @@ static void LocalCommit(void)
 #ifndef FW_PROTOCOL_TEST
     DgusToFlash(flashMAIN_BLOCK_ORDER,LOCAL_RECORD,LOCAL_RECORD,6);
     FlashToDgus(flashMAIN_BLOCK_ORDER,LOCAL_RECORD,LOCAL_RECORD,6);
+#endif
     if(!LocalRecordValid() || FwGet(LOCAL_RECORD+2)!=saved_enable ||
        FwGet(LOCAL_RECORD+3)!=saved_minutes) { FwSet(FW_UI_RESULT_VP,3); return; }
-#endif
     timer_elapsed=0; timer_running=0; timer_at=FwNow();
     /* Changing just the interval must not re-arm a failed/submitted command. */
     if(!saved_enable || !timer_enabled) timer_fault=timer_wait=0;
     timer_enabled=saved_enable; timer_minutes=saved_minutes;
+}
+/* 0 failed, 1 satisfied, 2 not yet known. Temperature units are 0.1 C. */
+static uint8_t UiCondition(uint8_t item)
+{
+    if(offline) return 2;
+    if(item==0) {
+        if((Valid(30) && (int16_t)FwGet(FW_MIRROR_VP+30)<0) ||
+           (Valid(37) && FwGet(FW_MIRROR_VP+37)>0)) return 1;
+        return Valid(30) && Valid(37)?0:2;
+    }
+    if(item==1) {
+        if(!Valid(41) || !Valid(42)) return 2;
+        return !(FwGet(FW_MIRROR_VP+41)&0x60D7) && !(FwGet(FW_MIRROR_VP+42)&0x7763);
+    }
+    if(!Valid(30)) return 2;
+    return (int16_t)FwGet(FW_MIRROR_VP+30)<20;
+}
+/* Reasons share the same icon table on both confirmation pages. */
+static uint8_t UiCommandReason(uint16_t key)
+{
+    uint8_t c;
+    if(key==1 || key==3 || key==7 || key==38 || key==42 || key==43 || key==44) return 0;
+    if(offline || !Valid(42)) return 1;
+    if(FwGet(FW_MIRROR_VP+42)&1) return 5;
+    if(key!=40 && key!=51) return 0;
+    c=UiCondition(0); if(c!=1) return c==2?1:2;
+    c=UiCondition(1); if(c!=1) return c==2?1:3;
+    if(key==51) { c=UiCondition(2); if(c!=1) return c==2?1:4; }
+    if(key==40 && (!Valid(44) || !(FwGet(FW_MIRROR_VP+44)&128))) return Valid(44)?6:1;
+    return 0;
+}
+static void PassMask(void)
+{
+    char s[7]; uint8_t i;
+    for(i=0;i<pass_length;i++) s[i]='*';
+    s[i]=0; UiText(FW_UI_PASS_MASK,s,4);
+}
+static void PassDraft(void)
+{
+    pass_draft=pass_value; pass_draft_set=pass_set;
+    FwSet(FW_UI_PASS_ENABLE,pass_enabled); FwSet(FW_UI_PASS_SET,pass_set);
+}
+static uint16_t PassChecksum(uint16_t e,uint16_t set,uint32_t value)
+{
+    return (uint16_t)(0xC615 ^ e ^ (set<<8) ^ (uint16_t)value ^ (uint16_t)(value>>16));
+}
+static uint8_t PassRecordValid(void)
+{
+    uint16_t e=FwGet(FW_UI_PASS_RECORD+2), s=FwGet(FW_UI_PASS_RECORD+3), sum;
+    uint32_t v=((uint32_t)FwGet(FW_UI_PASS_RECORD+4)<<16)|FwGet(FW_UI_PASS_RECORD+5);
+    sum=PassChecksum(e,s,v);
+    return FwGet(FW_UI_PASS_RECORD)==0x5057 && FwGet(FW_UI_PASS_RECORD+1)==1 &&
+        e<=1 && s<=1 && (!e || s) && v<=999999UL &&
+        FwGet(FW_UI_PASS_RECORD+6)==sum && FwGet(FW_UI_PASS_RECORD+7)==(uint16_t)~sum;
+}
+static void PassInit(void)
+{
+    pass_enabled=pass_set=pass_authorized=pass_mode=pass_length=0;
+    pass_value=pass_input=pass_first=0; force_page_write=0; start_submit_page=0;
+#ifndef FW_PROTOCOL_TEST
+    FlashToDgus(flashMAIN_BLOCK_ORDER,FW_UI_PASS_RECORD,FW_UI_PASS_RECORD,8);
+#endif
+    if(PassRecordValid()) {
+        pass_enabled=(uint8_t)FwGet(FW_UI_PASS_RECORD+2); pass_set=(uint8_t)FwGet(FW_UI_PASS_RECORD+3);
+        pass_value=((uint32_t)FwGet(FW_UI_PASS_RECORD+4)<<16)|FwGet(FW_UI_PASS_RECORD+5);
+    }
+    PassDraft(); PassMask(); FwSet(FW_UI_PASS_STATE,0);
+}
+static uint8_t PassCommit(void)
+{
+    uint16_t sum;
+    if(pass_saved_enable==pass_enabled && pass_saved_set==pass_set && pass_saved==pass_value) return 1;
+    sum=PassChecksum(pass_saved_enable,pass_saved_set,pass_saved);
+    FwSet(FW_UI_PASS_RECORD,0x5057); FwSet(FW_UI_PASS_RECORD+1,1);
+    FwSet(FW_UI_PASS_RECORD+2,pass_saved_enable); FwSet(FW_UI_PASS_RECORD+3,pass_saved_set);
+    FwSet(FW_UI_PASS_RECORD+4,(uint16_t)(pass_saved>>16)); FwSet(FW_UI_PASS_RECORD+5,(uint16_t)pass_saved);
+    FwSet(FW_UI_PASS_RECORD+6,sum); FwSet(FW_UI_PASS_RECORD+7,(uint16_t)~sum);
+#ifndef FW_PROTOCOL_TEST
+    DgusToFlash(flashMAIN_BLOCK_ORDER,FW_UI_PASS_RECORD,FW_UI_PASS_RECORD,8);
+    FlashToDgus(flashMAIN_BLOCK_ORDER,FW_UI_PASS_RECORD,FW_UI_PASS_RECORD,8);
+#endif
+    if(!PassRecordValid() || FwGet(FW_UI_PASS_RECORD+2)!=pass_saved_enable ||
+       FwGet(FW_UI_PASS_RECORD+3)!=pass_saved_set ||
+       FwGet(FW_UI_PASS_RECORD+4)!=(uint16_t)(pass_saved>>16) ||
+       FwGet(FW_UI_PASS_RECORD+5)!=(uint16_t)pass_saved) return 0;
+    pass_enabled=pass_saved_enable; pass_set=pass_saved_set; pass_value=pass_saved;
+    /* Saving within an authenticated settings session does not re-lock it. */
+    pass_authorized=1; return 1;
+}
+static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
+{
+    pass_origin=ReadPageId(); if(pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=9;
+    pass_mode=mode; pass_target=target; pass_notify=notify; pass_length=0; pass_input=pass_first=0;
+    FwSet(FW_UI_PASS_STATE,mode==1?0:1); PassMask(); FwSet(FW_UI_EVENT_VP,0);
+    SwitchPageById(FW_UI_PASS_PAGE);
+}
+static void UiNavigate(uint16_t target)
+{
+    if(target==6 || target==9 || target==12 || target==30) pass_authorized=0;
+    if((target==1 || target==42) && pass_enabled && !pass_authorized) {
+        if(ReadPageId()!=FW_UI_PASS_PAGE || pass_mode!=1) PassOpen(1,target,0);
+        return;
+    }
+    pass_mode=0; pass_input=pass_first=0; pass_length=0; PassMask();
+    if(ReadPageId()!=target) SwitchPageById(target);
+}
+static void PassEvent(uint16_t e)
+{
+    if(ui_write || save_count || command==6 || FwGet(FW_WRITE_TRIGGER_VP)) return;
+    if(e==0x0500 && ReadPageId()==2) { PassOpen(2,2,0); return; }
+    if(ReadPageId()!=FW_UI_PASS_PAGE || !pass_mode) return;
+    if(e>=0x0510 && e<=0x0519 && pass_length<6) { pass_input=pass_input*10+(e&15); ++pass_length; }
+    else if(e==0x0520) { if(pass_length) { pass_input/=10; --pass_length; } }
+    else if(e==0x0522) { pass_mode=0; pass_input=pass_first=0; pass_length=0; SwitchPageById(pass_origin); }
+    else if(e==0x0521) {
+        if(pass_length!=6) { FwSet(FW_UI_PASS_STATE,5); return; }
+        if(pass_mode==2) { pass_first=pass_input; pass_mode=3; FwSet(FW_UI_PASS_STATE,2); }
+        else if(pass_mode==3) {
+            if(pass_input!=pass_first) { pass_mode=2; FwSet(FW_UI_PASS_STATE,4); }
+            else { pass_draft=pass_input; pass_draft_set=1; FwSet(FW_UI_PASS_SET,1); pass_mode=0; SwitchPageById(2); }
+        } else if(pass_input!=pass_value) FwSet(FW_UI_PASS_STATE,3);
+        else if(offline || !Valid(16)) { FwSet(FW_UI_PASS_STATE,6); return; }
+        else {
+            pass_authorized=1;
+            if(pass_notify) { nav_target=pass_target; force_page_write=1; UiSubmit(16,pass_target); }
+            else UiNavigate(pass_target);
+        }
+        pass_input=0; pass_length=0;
+    }
+    PassMask();
 }
 static void LocalTask(uint32_t now)
 {
@@ -258,6 +400,7 @@ static void LocalTask(uint32_t now)
     else if(!Valid(82) || !Valid(44)) state=3;
     else if(!FwGet(FW_MIRROR_VP+82)) state=4;
     else if(!(FwGet(FW_MIRROR_VP+44)&128)) state=5;
+    else if(UiCommandReason(40)) state=5;
     else {
         state=9;
         if(!command && !ui_write && !save_count && !local_save && !FwGet(FW_WRITE_TRIGGER_VP)) {
@@ -284,6 +427,11 @@ static void UiDisplay(void)
     uint8_t i, a, parts_valid=!offline && DisplayValid(44);
     uint16_t parts=FwGet(FW_MIRROR_VP+44);
     uint16_t result=FwGet(FW_UI_RESULT_VP);
+    uint8_t reason=UiCommandReason(UiLogicalPage()==3?51:40);
+    for(i=0;i<3;i++) UiSet(FW_UI_CHECK_VP+i,UiCondition(i));
+    UiSet(FW_UI_LID_VP,!offline && DisplayValid(42) && (FwGet(FW_MIRROR_VP+42)&1));
+    UiSet(FW_UI_START_VP,!reason);
+    UiSet(FW_UI_REASON_VP,reason);
     /* A previous page's failed action is not a failure to enter this page. */
     if(ui_result_page!=UiLogicalPage()) result=0;
     for(i=0;i<sizeof(live_fields);i++) {
@@ -331,7 +479,13 @@ static void UiAfterReply(uint16_t address, uint16_t value)
     if(address==16 && (value==1 || value==42)) operation_page=value;
     if(address==16 && value!=fw_page) {
         fw_page=value;
-        if(UiPage(value) && ReadPageId()!=value) SwitchPageById(value);
+        /* A controller page change supersedes a queued screen action. */
+        if(ui_write && command==3 && (nav_target || start_submit_page)) {
+            FwSet(FW_WRITE_TRIGGER_VP,0); ui_write=0; nav_target=start_submit_page=0;
+            force_page_write=0; FwSet(FW_UI_RESULT_VP,3);
+            if(pass_mode==1) pass_authorized=0;
+        }
+        if(UiPage(value) && ReadPageId()!=value) UiNavigate(value);
     }
 }
 
@@ -419,6 +573,8 @@ static void FwFinish(uint16_t error)
     FwSet(FW_ERROR_VP, error);
     if(command == 6) FwSet(FW_WRITE_RESULT_VP, error ? 3 : 2);
     if(error) {
+        if(pass_mode==1) { pass_authorized=0; FwSet(FW_UI_PASS_STATE,6); }
+        force_page_write=0; start_submit_page=0;
         local_save=0;
         /* Never replay a failed write; recovery performs reads only. */
         refresh_active = refresh_pending = range_index = 0;
@@ -438,7 +594,7 @@ static void FwFinish(uint16_t error)
             if(nav_target) {
                 fw_page=nav_target;
                 if(nav_target==1 || nav_target==42) operation_page=nav_target;
-                if(ReadPageId()!=nav_target) SwitchPageById(nav_target);
+                UiNavigate(nav_target);
                 nav_target=0;
             }
             if(save_count && save_index<save_count) ++save_index;
@@ -449,6 +605,7 @@ static void FwFinish(uint16_t error)
         refresh_active = 0;
         refreshed_at=FwNow(); offline=0;
     }
+    if(command==6) { force_page_write=0; start_submit_page=0; }
     command = 0;
     UiDisplay();
 }
@@ -569,7 +726,7 @@ void FwProtocolInit(void)
     for(i = USB_VIDEO_VP; i <= USB_SOFTWARE_GO_VP; ++i) FwSet(i, 0);
     for(i = 0; i <= 88; ++i) FwSet(FW_MIRROR_VP + i, 0);
     for(i=FW_UI_EVENT_VP;i<FW_UI_LIVE_VP;i++) FwSet(i,0);
-    LocalInit();
+    PassInit(); LocalInit();
     UiDisplay();
 }
 
@@ -610,6 +767,8 @@ static void UiEvent(void)
     uint8_t i,a,n,good;
     if(!e) return;
     FwSet(FW_UI_EVENT_VP,0);
+    if((e>>8)==5) { PassEvent(e); return; }
+    if(p==FW_UI_PASS_PAGE) return;
     if((e>>8)!=1 && (e>>8)!=2 && (e<0x0300 || e>0x0303) && (e<0x0400 || e>0x0405)) return;
     if(!ui_write && !save_count && !FwGet(FW_WRITE_TRIGGER_VP)) ui_result_page=p;
     if(e==0x0400) { SwitchPageById(120); return; }
@@ -638,12 +797,16 @@ static void UiEvent(void)
     }
     if((e>>8)==1) {
         v=e&255;
-        if((v==38 && !(FwGet(FW_MIRROR_VP+44)&4)) ||
+        if((pass_enabled && !pass_authorized) || UiCommandReason(v) ||
+           (v==38 && (!Valid(44) || !(FwGet(FW_MIRROR_VP+44)&4))) ||
            (v==40 && !(FwGet(FW_MIRROR_VP+44)&128))) { FwSet(FW_UI_RESULT_VP,3); return; }
-        if(UiKey(v)) UiSubmit(14,v); else FwSet(FW_UI_RESULT_VP,3);
+        if(UiKey(v)) { if(v==40 || v==51) start_submit_page=p; UiSubmit(14,v); }
+        else FwSet(FW_UI_RESULT_VP,3);
     } else if((e>>8)==2) {
         target=e&255;
         if(target==0) target=UiWarningPage(p)?operation_page:return_page;
+        if((target==1 || target==42) && pass_enabled && !pass_authorized) { PassOpen(1,target,1); return; }
+        if(p==9 && target==1) force_page_write=1;
         if(UiPage(target)) { if(!UiSettingsPage(p)) return_page=p; nav_target=target; UiSubmit(16,target); }
     } else if(e==0x0300 && editing) {
         UiHardness();
@@ -657,6 +820,9 @@ static void UiEvent(void)
             saved_enable=(uint8_t)v;
             saved_minutes=target*60+FwGet(LOCAL_MINS);
             if(saved_enable && !saved_minutes) good=0;
+            v=FwGet(FW_UI_PASS_ENABLE);
+            if(v>1 || (v && !pass_draft_set)) good=0;
+            pass_saved_enable=(uint8_t)v; pass_saved_set=pass_draft_set; pass_saved=pass_draft;
         }
         for(i=0;i<n;i++) {
             a=p==2?basic_fields[i]:(p==FW_UI_ADV2_PAGE?advanced2_fields[i]:advanced_fields[i]); v=FwGet(FW_EDIT_VP+a);
@@ -733,17 +899,22 @@ void FwProtocolTask(void)
     R11VideoTouchTask(!ui_write && !save_count && command!=6 && !FwGet(FW_WRITE_TRIGGER_VP));
 #endif
     page = UiLogicalPage();
+    if((page==1 || page==42) && pass_enabled && !pass_authorized) {
+        PassOpen(1,page,0); page=FW_UI_PASS_PAGE;
+    }
     if(page != last_page) {
-        last_page = page;
+        if(page==6 || page==9 || page==12 || page==30) pass_authorized=0;
         /* Local overlays/player do not trigger extra business reads. */
         if(!offline && UiSettingsPage(page)) refresh_pending = 1;
-        editing=UiSettingsPage(page); hardness_ready=temp_limits_ready=0;
-        if(page==2) LocalDraft();
+        editing=UiSettingsPage(page) || (page==FW_UI_PASS_PAGE && pass_mode>=2);
+        hardness_ready=temp_limits_ready=0;
+        if(page==2 && last_page!=FW_UI_PASS_PAGE) LocalDraft();
         /* Clear completed, page-local feedback; keep active operation ownership. */
         if(!ui_write && !save_count) { FwSet(FW_UI_RESULT_VP,0); ui_result_page=page; }
-        if(editing) {
+        if(editing && page!=FW_UI_PASS_PAGE && last_page!=FW_UI_PASS_PAGE) {
             for(address=0;address<sizeof(edit_valid);address++) edit_valid[address]=0;
         }
+        last_page=page;
     }
 #if sysADVERTISE_MODE_ENABLED
     if(R11VideoIdleActive() || R11VideoWakeBlocked()) FwSet(FW_UI_EVENT_VP,0);
@@ -763,6 +934,12 @@ void FwProtocolTask(void)
         FwSet(FW_WRITE_TRIGGER_VP, 0);
         address = FwGet(FW_WRITE_ADDR_VP);
         value = FwGet(FW_WRITE_VALUE_VP);
+        if(address==14 && (UiCommandReason(value) ||
+           (start_submit_page && page!=start_submit_page))) {
+            start_submit_page=0; ui_write=0;
+            if(timer_owner) { timer_owner=0; timer_wait=0; timer_fault=1; }
+            FwSet(FW_UI_RESULT_VP,3); FwSet(FW_WRITE_RESULT_VP,3); return;
+        }
         if(warning_submit_page) {
             alarm_key=UiWarningAlarm(warning_submit_page,&alarm_reg,&alarm_bit);
             if(page!=warning_submit_page || !alarm_key || !Valid(alarm_reg) ||
@@ -775,10 +952,11 @@ void FwProtocolTask(void)
         if(command || offline || trigger != 1 || !FwWritable(address, value) || !FwPairedWritable(address,value)) {
             if(timer_owner) { timer_owner=0; timer_fault=1; }
             local_save=0;
+            force_page_write=0; start_submit_page=0;
             FwSet(FW_WRITE_RESULT_VP, 3);
             FwSet(FW_ERROR_VP, command ? FW_ERR_BUSY : FW_ERR_VALUE);
             if(ui_write) { ui_write=0; save_count=save_index=0; nav_target=0; FwSet(FW_UI_RESULT_VP,3); }
-        } else if(address != 14 &&
+        } else if(address != 14 && !force_page_write &&
                   (mirror_valid[address >> 3] & (uint8_t)(1U << (address & 7))) &&
                   FwGet(FW_MIRROR_VP + address) == value) {
             /* Ordinary same-value submissions succeed without bus traffic. */
@@ -788,7 +966,7 @@ void FwProtocolTask(void)
                 if(nav_target) {
                     fw_page=nav_target;
                     if(nav_target==1 || nav_target==42) operation_page=nav_target;
-                    if(ReadPageId()!=nav_target) SwitchPageById(nav_target);
+                    UiNavigate(nav_target);
                     nav_target=0;
                 }
                 if(save_count) ++save_index;
