@@ -268,7 +268,7 @@ extern uint32_t sysFCLK;
         #define uartUART2_TIMEOUTSET     5
     #endif /* uartUART2_TIMEOUT_ENABLED */
     
-    #define uartUART2_BAUDRATE              115200   /* FW UART2: 115200, 8N1 */
+    #define uartUART2_BAUDRATE              115200   /* UART2: 115200, 8N1 */
     #define uartUART2_485_ENABLED            0         /* UART2 RS485模式使能标志 0:禁用 1启用 */
     
     #if uartUART2_485_ENABLED
@@ -300,8 +300,8 @@ extern uint32_t sysFCLK;
     #if uartUART4_TIMEOUT_ENABLED
         #define uartUART4_TIMEOUTSET     5
     #endif  /* uartUART4_TIMEOUT_ENABLED */   
-    #define uartUART4_BAUDRATE           921600
-    #define uartUART4_485_ENABLED        0
+    #define uartUART4_BAUDRATE           9600   /* FW UART4: 9600, 8N1 */
+    #define uartUART4_485_ENABLED        1
     
     #if uartUART4_485_ENABLED
         sbit TR4 = P0^0;

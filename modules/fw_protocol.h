@@ -27,6 +27,16 @@
 #define FW_UI_HARDNESS_VP  0x37F0
 #define FW_UI_BOARD2_PAGE  140
 #define FW_UI_PART_BIT_VP  0x3810
+#define FW_UI_CHECK_VP     0x3820
+#define FW_UI_LID_VP       0x3823
+#define FW_UI_START_VP     0x3824
+#define FW_UI_REASON_VP    0x3825
+#define FW_UI_PASS_ENABLE  0x3830
+#define FW_UI_PASS_STATE   0x3831
+#define FW_UI_PASS_MASK    0x3832
+#define FW_UI_PASS_SET     0x3836
+#define FW_UI_PASS_RECORD  0x3840
+#define FW_UI_PASS_PAGE    142
 #define USB_VIDEO_VP       0x3780
 #define USB_SOFTWARE_VP    0x3781
 #define USB_COMPLETE_VP    0x3782
