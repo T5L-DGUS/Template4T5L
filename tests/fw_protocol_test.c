@@ -2,7 +2,7 @@
 #include "fw_test_platform.h"
 
 typedef struct { uint8_t command; uint16_t address, value; } Request;
-UART_TYPE Uart2 = {2}, Uart_R11 = {11};
+UART_TYPE Uart4 = {4}, Uart_R11 = {11};
 uint8_t ET0 = 1;
 static uint16_t vp[0x4000], page, device[89];
 static uint32_t tick;
@@ -44,7 +44,7 @@ uint16_t crc_16(uint8_t *bytes, uint16_t length)
 void SendModbusReadHoldingRegistersFrame(UART_TYPE *uart, uint8_t station,
                                         uint16_t address, uint16_t count)
 {
-    if (uart != &Uart2 || station != 1 || request_count == 256) { failed_line = __LINE__; return; }
+    if (uart != &Uart4 || station != 1 || request_count == 256) { failed_line = __LINE__; return; }
     requests[request_count].command = 3;
     requests[request_count].address = address;
     requests[request_count++].value = count;
@@ -52,7 +52,7 @@ void SendModbusReadHoldingRegistersFrame(UART_TYPE *uart, uint8_t station,
 void SendModbusWriteSingleRegisterFrame(UART_TYPE *uart, uint8_t station,
                                       uint16_t address, uint16_t value)
 {
-    if (uart != &Uart2 || station != 1 || request_count == 256) { failed_line = __LINE__; return; }
+    if (uart != &Uart4 || station != 1 || request_count == 256) { failed_line = __LINE__; return; }
     requests[request_count].command = 6;
     requests[request_count].address = address;
     requests[request_count++].value = value;
@@ -265,7 +265,7 @@ static void test_parser_split_crc_and_deadline(void) {
 }
 static void test_usb_independent(void) {
  uint8_t f[6]={0xaa,0x55,0,2,0xfb,1};
- online();FwUsbProtocol(&Uart2,f,6);CHECK(!vp[USB_VIDEO_VP]);FwUsbProtocol(&Uart_R11,f,6);CHECK(vp[USB_VIDEO_VP]);
+ online();FwUsbProtocol(&Uart4,f,6);CHECK(!vp[USB_VIDEO_VP]);FwUsbProtocol(&Uart_R11,f,6);CHECK(vp[USB_VIDEO_VP]);
  vp[USB_VIDEO_GO_VP]=1;FwProtocolTask();CHECK(usb_count==1 && usb_frame[5]==1);
  f[5]=2;FwUsbProtocol(&Uart_R11,f,6);vp[USB_SOFTWARE_GO_VP]=1;FwProtocolTask();CHECK(usb_count==2 && usb_frame[5]==2);
  f[5]=3;FwUsbProtocol(&Uart_R11,f,6);CHECK(vp[USB_COMPLETE_VP]);CHECK(!vp[USB_VIDEO_VP]);

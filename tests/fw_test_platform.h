@@ -7,7 +7,7 @@
 #define sysN5CAMERA_MODE_ENABLED 0
 #define sysADVERTISE_MODE_ENABLED 1
 typedef struct { uint8_t id; } UART_TYPE;
-extern UART_TYPE Uart2, Uart_R11;
+extern UART_TYPE Uart4, Uart_R11;
 extern uint8_t ET0;
 uint32_t GetSysTick(void);
 uint16_t ReadPageId(void);

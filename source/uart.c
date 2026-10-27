@@ -48,15 +48,16 @@ uint32_t sysFCLK;
 
 #if uartUART2_ENABLED
 UART_TYPE Uart2;
-uint8_t Uart2TxBuffer[uartUART2_TXBUF_SIZE+1];
-uint8_t Uart2RxBuffer[uartUART2_RXBUF_SIZE+1];
 static uint8_t xdata uart2_partial[258];
 static uint16_t uart2_partial_size;
 static uint32_t uart2_last_rx;
+uint8_t Uart2TxBuffer[uartUART2_TXBUF_SIZE+1];
+uint8_t Uart2RxBuffer[uartUART2_RXBUF_SIZE+1];
 void Uart2Init(const uint32_t bdt)
 {
 uint32_t baud;
     uart2_partial_size = 0;
+    uart2_last_rx = 0;
     memset((uint8_t *)&Uart2, 0, sizeof(UART_TYPE));
     memset((uint8_t *)Uart2TxBuffer, 0, uartUART2_TXBUF_SIZE);
     memset((uint8_t *)Uart2RxBuffer, 0, uartUART2_RXBUF_SIZE);
@@ -203,11 +204,16 @@ void Uart3TxRxIsr()   interrupt 16
 
 #if uartUART4_ENABLED
 UART_TYPE Uart4;
+static uint8_t xdata uart4_partial[258];
+static uint16_t uart4_partial_size;
+static uint32_t uart4_last_rx;
 uint8_t Uart4TxBuffer[uartUART4_TXBUF_SIZE+1];
 uint8_t Uart4RxBuffer[uartUART4_RXBUF_SIZE+1];
 void Uart4Init(const uint32_t bdt)
 {
     uint32_t baud;
+    uart4_partial_size = 0;
+    uart4_last_rx = 0;
     memset((uint8_t *)&Uart4, 0, sizeof(UART_TYPE));
     memset((uint8_t *)Uart4TxBuffer, 0, uartUART4_TXBUF_SIZE);
     memset((uint8_t *)Uart4RxBuffer, 0, uartUART4_RXBUF_SIZE);
@@ -623,10 +629,10 @@ static uint16_t r11_partial_size;
 #endif
 
 #if uartUART2_ENABLED
-/* Dispatch complete frames: Modbus payload bytes must never become VP writes. */
+/* UART2 retains DGUS fragments independently of the customer board on UART4. */
 static void Uart2ProtocolFeed(uint8_t *bytes, uint16_t count)
 {
-    uint16_t n, length, drop, j, crc;
+    uint16_t n, length, drop, j;
     uint32_t now;
     uint8_t enabled = ET0;
     ET0 = 0; now = GetSysTick(); ET0 = enabled;
@@ -648,27 +654,61 @@ static void Uart2ProtocolFeed(uint8_t *bytes, uint16_t count)
                         drop = length;
                     }
                 }
-            } else if(uart2_partial[0] == 1) {
-                if(uart2_partial_size < 2) break;
+            }
+            for(j = drop; j < uart2_partial_size; ++j) uart2_partial[j - drop] = uart2_partial[j];
+            uart2_partial_size -= drop;
+        }
+    }
+}
+#endif
+
+#if uartUART4_ENABLED
+/* Dispatch complete frames: Modbus payload bytes must never become VP writes. */
+static void Uart4ProtocolFeed(uint8_t *bytes, uint16_t count)
+{
+    uint16_t n, length, drop, j, crc;
+    uint32_t now;
+    uint8_t enabled = ET0;
+    ET0 = 0; now = GetSysTick(); ET0 = enabled;
+    if(now - uart4_last_rx >= 500UL) uart4_partial_size = 0;
+    uart4_last_rx = now;
+    for(n = 0; n < count; ++n) {
+        if(uart4_partial_size == sizeof(uart4_partial)) uart4_partial_size = 0;
+        uart4_partial[uart4_partial_size++] = bytes[n];
+        while(uart4_partial_size) {
+            drop = 1;
+            if(uart4_partial[0] == 0x5A) {
+                if(uart4_partial_size < 2) break;
+                if(uart4_partial[1] == 0xA5) {
+                    if(uart4_partial_size < 4) break;
+                    length = (uint16_t)uart4_partial[2] + 3;
+                    if(length >= 6 && (uart4_partial[3] == 0x82 || uart4_partial[3] == 0x83)) {
+                        if(uart4_partial_size < length) break;
+                        UartStandardDwin8283Protocal(&Uart4, uart4_partial, length);
+                        drop = length;
+                    }
+                }
+            } else if(uart4_partial[0] == 1) {
+                if(uart4_partial_size < 2) break;
                 length = 0;
-                if(uart2_partial[1] == 3) {
-                    if(uart2_partial_size < 3) break;
-                    if(uart2_partial[2] && uart2_partial[2] <= 59 && !(uart2_partial[2] & 1))
-                        length = uart2_partial[2] + 5;
-                } else if(uart2_partial[1] == 6) length = 8;
-                else if(uart2_partial[1] == 0x83 || uart2_partial[1] == 0x86) length = 5;
+                if(uart4_partial[1] == 3) {
+                    if(uart4_partial_size < 3) break;
+                    if(uart4_partial[2] && uart4_partial[2] <= 59 && !(uart4_partial[2] & 1))
+                        length = uart4_partial[2] + 5;
+                } else if(uart4_partial[1] == 6) length = 8;
+                else if(uart4_partial[1] == 0x83 || uart4_partial[1] == 0x86) length = 5;
                 if(length) {
-                    if(uart2_partial_size < length) break;
-                    crc = crc_16(uart2_partial, length - 2);
-                    if(uart2_partial[length - 2] == (uint8_t)crc && uart2_partial[length - 1] == (uint8_t)(crc >> 8)) {
-                        FwProtocolFeed(uart2_partial, length);
+                    if(uart4_partial_size < length) break;
+                    crc = crc_16(uart4_partial, length - 2);
+                    if(uart4_partial[length - 2] == (uint8_t)crc && uart4_partial[length - 1] == (uint8_t)(crc >> 8)) {
+                        FwProtocolFeed(uart4_partial, length);
                     }
                     /* Even a corrupt RTU payload is not a DGUS command. */
                     drop = length;
                 }
             }
-            for(j = drop; j < uart2_partial_size; ++j) uart2_partial[j - drop] = uart2_partial[j];
-            uart2_partial_size -= drop;
+            for(j = drop; j < uart4_partial_size; ++j) uart4_partial[j - drop] = uart4_partial[j];
+            uart4_partial_size -= drop;
         }
     }
 }
@@ -729,11 +769,20 @@ void UartReadFrame(UART_TYPE *uart)
             }
             #endif /* uartUART5_ENABLED */
         }   
+        #if uartUART2_ENABLED
         if(uart == &Uart2)
         {
             Uart2ProtocolFeed(frame, i);
             return;
         }
+        #endif
+        #if uartUART4_ENABLED
+        if(uart == &Uart4)
+        {
+            Uart4ProtocolFeed(frame, i);
+            return;
+        }
+        #endif
         total_frame_len = i;
         while(1)
         {

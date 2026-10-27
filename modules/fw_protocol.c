@@ -9,7 +9,7 @@
 #endif
 #endif
 
-/* FW uses Modbus on UART2. VP values preserve wire units. */
+/* FW uses Modbus on UART4. VP values preserve wire units. */
 #define FW_ADDRESS 1
 #define FW_TIMEOUT 500UL
 #define FW_ERR_TIMEOUT 0x0100
@@ -482,7 +482,7 @@ static void FwReply(uint8_t *frame, uint8_t length)
     }
 }
 
-/* Persistent UART2 assembler; never interpret an 06 echo as an 03 response. */
+/* Persistent UART4 assembler; never interpret an 06 echo as an 03 response. */
 void FwProtocolFeed(uint8_t *bytes, uint16_t length)
 {
     uint16_t index, crc;
@@ -801,7 +801,7 @@ void FwProtocolTask(void)
             FwInvalidateMirror();
             command = 6; sent_at = now; rx_size = 0;
             FwSet(FW_WRITE_RESULT_VP, 1);
-            SendModbusWriteSingleRegisterFrame(&Uart2, FW_ADDRESS, address, value);
+            SendModbusWriteSingleRegisterFrame(&Uart4, FW_ADDRESS, address, value);
         }
         return;
     }
@@ -820,5 +820,5 @@ void FwProtocolTask(void)
     request_count = full_refresh?ranges[range_index].count:live_ranges[range_index].count;
     ++range_index;
     command = 3; sent_at = now; rx_size = 0;
-    SendModbusReadHoldingRegistersFrame(&Uart2, FW_ADDRESS, request_address, request_count);
+    SendModbusReadHoldingRegistersFrame(&Uart4, FW_ADDRESS, request_address, request_count);
 }
