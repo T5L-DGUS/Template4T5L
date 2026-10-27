@@ -36,6 +36,8 @@
 #define FW_UI_PASS_MASK    0x3832
 #define FW_UI_PASS_SET     0x3836
 #define FW_UI_PASS_RECORD  0x3840
+/* ASCII current/set cylinder temperature, 16 bytes (8 words). */
+#define FW_UI_CYLINDER_TEXT_VP 0x3850
 #define FW_UI_PASS_PAGE    142
 #define FW_UI_RUN_EVENT    0x0104
 #define FW_UI_PASS_TIMEOUT_MS 60000UL

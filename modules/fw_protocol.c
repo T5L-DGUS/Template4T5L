@@ -182,17 +182,45 @@ static void UiText(uint16_t vp, const char *s, uint8_t words)
         UiSet(vp+i,v);
     }
 }
-static void UiNumber(uint16_t vp, uint16_t value, uint8_t decimals, uint8_t sign, uint8_t valid, uint8_t words)
+static uint8_t UiFormatNumber(char *buf, uint16_t value, uint8_t decimals, uint8_t sign, uint8_t valid)
 {
-    char buf[10], rev[8];
+    char rev[8];
     uint8_t n=0, j=0, neg=0;
     uint16_t mag=value;
-    if(!valid) { UiText(vp,"--",words); return; }
+    if(!valid) { buf[0]='-'; buf[1]='-'; buf[2]=0; return 2; }
     if(sign && (int16_t)value<0) { neg=1; mag=(uint16_t)(-(int16_t)value); }
     do { rev[n++]=(char)('0'+mag%10); mag/=10; } while(mag || n<=decimals);
     if(neg) buf[j++]='-';
     while(n) { buf[j++]=rev[--n]; if(decimals && n==decimals) buf[j++]='.'; }
-    buf[j]=0; UiText(vp,buf,words);
+    buf[j]=0; return j;
+}
+static void UiNumber(uint16_t vp, uint16_t value, uint8_t decimals, uint8_t sign, uint8_t valid, uint8_t words)
+{
+    char buf[10];
+    UiFormatNumber(buf,value,decimals,sign,valid); UiText(vp,buf,words);
+}
+static void UiCylinderTemperature(void)
+{
+    char buf[17];
+    uint8_t n;
+    n=UiFormatNumber(buf,FwGet(FW_MIRROR_VP+30),1,1,!offline && DisplayValid(30));
+    buf[n++]='/';
+    UiFormatNumber(buf+n,FwGet(FW_MIRROR_VP+5),1,1,!offline && DisplayValid(5));
+    UiText(FW_UI_CYLINDER_TEXT_VP,buf,8);
+}
+/* FW6/FW30 pages are the running view; keep FW16 unchanged on the bus. */
+static uint16_t UiRunPage(void)
+{
+    return !offline && Valid(30) && (int16_t)FwGet(FW_MIRROR_VP+30)<-30?30:6;
+}
+static void UiRunPageTask(void)
+{
+    uint16_t p=ReadPageId(), target;
+    if((fw_page!=6 && fw_page!=30) || (p!=6 && p!=30)) return;
+    /* An in-flight write invalidates control data but must not flicker the view. */
+    if(!offline && !Valid(30)) return;
+    target=UiRunPage();
+    if(p!=target) SwitchPageById(target);
 }
 static void LocalDraft(void)
 {
@@ -389,7 +417,7 @@ static uint8_t PassCommit(void)
 static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
 {
     pass_origin=ReadPageId(); if(pass_origin==0 || pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=1;
-    if(mode==1) target=42;
+    if(mode==1) { target=42; pass_origin=1; }
     pass_mode=mode; pass_target=target; pass_notify=notify; pass_length=0; pass_input=pass_first=0;
     FwSet(FW_UI_PASS_STATE,mode==1?0:1); PassMask(); FwSet(FW_UI_EVENT_VP,0);
     SwitchPageById(FW_UI_PASS_PAGE);
@@ -397,11 +425,11 @@ static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
 static void UiNavigate(uint16_t target)
 {
     if(target==1) target=42;
-    if((target==1 || target==42) && pass_enabled && !pass_authorized) {
-        if(ReadPageId()==1) return;
-        if(ReadPageId()!=FW_UI_PASS_PAGE || pass_mode!=1) PassOpen(1,42,1);
-        return;
+    if(target==42 && pass_enabled && !pass_authorized) {
+        if(ReadPageId()==FW_UI_PASS_PAGE && pass_mode==1) return;
+        target=1;
     }
+    if(target==6 || target==30) target=UiRunPage();
     pass_mode=0; pass_input=pass_first=0; pass_length=0; PassMask();
     if(ReadPageId()!=target) SwitchPageById(target);
 }
@@ -457,10 +485,10 @@ static void PassTouchTask(uint16_t touch,uint32_t now)
     if(p==1) {
         FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
         if(!pass_enabled || pass_authorized) UiNavigate(42);
-        else if(updated) {
+        else if(updated && state==1) {
             PassOpen(1,42,1); pass_touch_guard=1; pass_guard_at=now;
         }
-    } else if(p==42 && pass_enabled && !pass_authorized) PassOpen(1,42,1);
+    } else if(p==42 && pass_enabled && !pass_authorized) UiNavigate(42);
 }
 static void LocalTask(uint32_t now)
 {
@@ -527,6 +555,7 @@ static void UiDisplay(void)
         UiNumber(FW_UI_LIVE_VP+i*4,FwGet(FW_MIRROR_VP+a),live_decimals[i],
             a>=30 && a<=32,!offline && DisplayValid(a),4);
     }
+    UiCylinderTemperature();
     for(i=0;i<sizeof(display_fields);i++) {
         a=display_fields[i];
         UiNumber(FW_UI_EDIT_TEXT_VP+i*3,FwGet(FW_EDIT_VP+a),display_decimals[i],a==5,
@@ -818,7 +847,7 @@ void FwProtocolInit(void)
     for(i = 0; i <= 88; ++i) FwSet(FW_MIRROR_VP + i, 0);
     for(i=FW_UI_EVENT_VP;i<FW_UI_LIVE_VP;i++) FwSet(i,0);
     PassInit(); LocalInit();
-    if(pass_enabled) { PassOpen(1,42,1); pass_origin=1; }
+    if(pass_enabled) UiNavigate(42);
     UiDisplay();
 }
 
@@ -905,7 +934,7 @@ static void UiEvent(void)
         target=e&255;
         if(target==0) target=(p==4 || p==40)?42:(UiWarningPage(p)?operation_page:return_page);
         if(target==1) target=42;
-        if(target==42 && pass_enabled && !pass_authorized) { home_event=home_target=0; PassOpen(1,42,1); return; }
+        if(target==42 && pass_enabled && !pass_authorized) { home_event=home_target=0; UiNavigate(42); return; }
         if(p==9 && target==42) force_page_write=1;
         if(UiPage(target)) { if(!UiSettingsPage(p)) return_page=p; nav_target=target; UiSubmit(16,target); }
     } else if(e==0x0300 && editing) {
@@ -999,6 +1028,7 @@ void FwProtocolTask(void)
     touch=FwGet(0x0016);
     if((touch>>8)==0x5a) FwSet(0x0016,0);
     PassTouchTask(touch,now);
+    UiRunPageTask();
 #if sysADVERTISE_MODE_ENABLED
     R11VideoTouchTask(touch);
 #endif
