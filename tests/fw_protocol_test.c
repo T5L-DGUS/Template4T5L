@@ -12,6 +12,14 @@ static uint8_t usb_frame[6];
 static uint8_t idle_active,wake_blocked;
 static uint16_t idle_return;
 static uint16_t video_touch_sample;
+static uint8_t record_fail, delay_page_switch;
+static uint16_t pending_page;
+static uint16_t record_fail_address;
+void FwTestRecordStore(uint16_t address,uint8_t words) { if(record_fail && (!record_fail_address || record_fail_address==address)) vp[address+words-1]^=1; }
+void RtcSetTime(uint8_t *t) {
+ unsigned i; for(i=0;i<4;i++) vp[0x10+i]=((uint16_t)t[i*2]<<8)|t[i*2+1];
+}
+void RtcReadTime(void) {}
 void R11VideoTouchTask(uint16_t touch) {video_touch_sample=touch;}
 uint8_t R11VideoIdleActive(void) {return idle_active && page==121;}
 uint16_t R11VideoIdleReturnPage(void) {return idle_return;}
@@ -21,7 +29,7 @@ uint8_t R11VideoWakeBlocked(void) {return wake_blocked;}
 
 uint32_t GetSysTick(void) { return tick; }
 uint16_t ReadPageId(void) { return page; }
-void SwitchPageById(uint16_t p) { page=p; }
+void SwitchPageById(uint16_t p) { if(delay_page_switch) pending_page=p; else page=p; }
 void write_dgus_vp(uint32_t address, uint8_t *bytes, uint16_t count)
 {
     uint16_t i;
@@ -112,6 +120,9 @@ static void reset_at(uint32_t start)
     device[16]=42;device[80]=30;device[81]=100;device[83]=700;device[85]=30;device[44]=0xffff;
     page = 42; tick = start; request_count = usb_count = 0;
     idle_active=wake_blocked=0;idle_return=42;
+    record_fail=delay_page_switch=0; pending_page=0;
+    record_fail_address=0;
+    vp[0x10]=0x1a0a;vp[0x11]=0x1b02;vp[0x12]=0x0100;vp[0x13]=0;
     FwProtocolInit();
 }
 static void reset(void) { reset_at(0); }
@@ -132,7 +143,12 @@ static void submit(uint16_t address, uint16_t value)
 }
 static void online(void) { reset(); FwProtocolTask(); finish_snapshot(); }
 static void event(uint16_t e) { vp[FW_UI_EVENT_VP]=e; FwProtocolTask(); }
-static void go(uint16_t p) { event(0x0200|p); reply(); FwProtocolTask(); finish_snapshot(); }
+static void go(uint16_t p) {
+ const char *digits="123456";
+ event(0x0200|p);
+ if(p==27 && page==FW_UI_PASS_PAGE) { while(*digits)event(0x0510+(uint16_t)(*digits++-'0'));event(0x0521); }
+ reply(); FwProtocolTask(); finish_snapshot();
+}
 static void advance(uint32_t ms) { tick+=ms;FwProtocolTask(); }
 static void exception(void) { uint8_t f[5]={1,0x86,3,0,0};add_crc(f,5);FwProtocolFeed(f,5); }
 static int text_is(uint16_t a,const char *s) {
@@ -143,7 +159,7 @@ static void test_initial_and_poll(void) {
  reset();CHECK(vp[FW_UI_READY_VP]==0);CHECK(text_is(0x3720,"--"));event(0x0101);CHECK(requests[0].command==3);
  finish_snapshot();CHECK(request_count==15);CHECK(vp[FW_UI_READY_VP]==1);
  CHECK(text_is(0x3724,"0.0"));CHECK(vp[FW_MIRROR_VP+3]==0);
- before=request_count;advance(999);CHECK(request_count==before);advance(1);finish_snapshot();CHECK(request_count==before+9);
+ before=request_count;advance(999);CHECK(request_count==before);advance(1);finish_snapshot();CHECK(request_count==before+10);
  for(i=before;i<request_count;i++)CHECK(requests[i].command==3 && requests[i].address!=0);
 }
 static void test_units_signed_and_bounds(void) {
@@ -163,8 +179,8 @@ static void test_edit_refresh_cancel(void) {
 }
 static void test_save_snapshot_and_repeat(void) {
  unsigned before;
- online();go(27);vp[FW_EDIT_VP]=21;vp[FW_EDIT_VP+1]=22;event(0x0300);
- CHECK(requests[request_count-1].address==0);CHECK(requests[request_count-1].value==21);
+ online();go(27);vp[FW_EDIT_VP+10]=1;vp[FW_EDIT_VP+1]=22;event(0x0300);
+ CHECK(requests[request_count-1].address==10);CHECK(requests[request_count-1].value==1);
  before=request_count;event(0x0300);CHECK(request_count==before);vp[FW_EDIT_VP+1]=23;
  reply();FwProtocolTask();CHECK(requests[request_count-1].address==1);CHECK(requests[request_count-1].value==22);
  reply();FwProtocolTask();finish_snapshot();CHECK(vp[FW_EDIT_VP+1]==23);CHECK(vp[FW_UI_RESULT_VP]==2);
@@ -172,10 +188,10 @@ static void test_save_snapshot_and_repeat(void) {
 }
 static void test_partial_failure_and_recovery(void) {
  unsigned before;
- online();go(27);vp[FW_EDIT_VP]=21;vp[FW_EDIT_VP+1]=22;event(0x0300);reply();FwProtocolTask();exception();
- CHECK(device[0]==21 && device[1]==20);CHECK(vp[FW_UI_RESULT_VP]==3);CHECK(vp[FW_UI_READY_VP]==0);
+ online();go(27);vp[FW_EDIT_VP+10]=1;vp[FW_EDIT_VP+1]=22;event(0x0300);reply();FwProtocolTask();exception();
+ CHECK(device[10]==1 && device[1]==20);CHECK(vp[FW_UI_RESULT_VP]==3);CHECK(vp[FW_UI_READY_VP]==0);
  before=request_count;advance(2999);CHECK(request_count==before);advance(1);CHECK(requests[request_count-1].command==3);finish_snapshot();
- CHECK(vp[FW_EDIT_VP]==21 && vp[FW_EDIT_VP+1]==22);event(0x0300);CHECK(requests[request_count-1].command==6 && requests[request_count-1].address==1);
+ CHECK(vp[FW_EDIT_VP+10]==1 && vp[FW_EDIT_VP+1]==22);event(0x0300);CHECK(requests[request_count-1].command==6 && requests[request_count-1].address==1);
 }
 static void test_read_timeout_cancels_queued_action(void) {
  unsigned before;
@@ -193,7 +209,7 @@ static void test_pages_local_and_unknown(void) {
  unsigned before;
  online();event(0x0400);CHECK(page==120);before=request_count;FwProtocolTask();CHECK(request_count==before);
  advance(1000);finish_snapshot();CHECK(page==120);device[16]=88;advance(1000);finish_snapshot();CHECK(page==120);
- device[16]=9;advance(1000);finish_snapshot();CHECK(page==9);event(0x0278);CHECK(page==9);CHECK(request_count==before+27);
+ device[16]=9;advance(1000);finish_snapshot();CHECK(page==9);event(0x0278);CHECK(page==9);CHECK(request_count==before+30);
  event(0x0400);event(0x0401);CHECK(page==9);
  event(0x022a);CHECK(page==9);reply();CHECK(page==42);
 }
@@ -208,7 +224,7 @@ static void test_warning_pages_and_return(void) {
  unsigned i,before;
  for(i=0;i<sizeof(ps)/sizeof(ps[0]);i++) {
   online();device[16]=ps[i];advance(1000);finish_snapshot();CHECK(page==ps[i]);
-  before=request_count;event(0x0200);CHECK(page==ps[i]);CHECK(requests[before].address==16 && requests[before].value==42);
+  before=request_count;event(0x0200);CHECK(page==(ps[i]==17?42:ps[i]));CHECK(requests[before].address==16 && requests[before].value==42);
   reply();CHECK(page==42);
  }
  online();go(42);device[16]=43;advance(1000);finish_snapshot();event(0x0200);CHECK(requests[request_count-1].value==42);reply();CHECK(page==42);
@@ -225,6 +241,7 @@ static void test_warning_clear_fixed_mapping(void) {
  static const uint8_t keys[]={7,7,7,7,7,7,7,7,43,44,42};
  unsigned i,before;
  for(i=0;i<sizeof(ps);i++) {
+  if(ps[i]==17) continue; /* Confirm now acknowledges locally; covered separately. */
   online();device[16]=ps[i];device[41]=device[42]=0xffff;advance(1000);finish_snapshot();
   vp[FW_UI_ALARM_VP]=1;before=request_count;event(0x0303);
   CHECK(request_count==before+1 && requests[before].address==14 && requests[before].value==keys[i]);
@@ -291,12 +308,12 @@ static void test_result_belongs_to_original_page(void) {
 }
 static void test_idle_keeps_edit_session_and_blocks_wake_action(void) {
  unsigned before;
- online();go(27);vp[FW_EDIT_VP]=21;idle_return=27;idle_active=1;page=121;
- advance(1000);finish_snapshot();CHECK(page==121 && vp[FW_EDIT_VP]==21);
+ online();go(27);vp[FW_EDIT_VP+10]=1;idle_return=27;idle_active=1;page=121;
+ advance(1000);finish_snapshot();CHECK(page==121 && vp[FW_EDIT_VP+10]==1);
  before=request_count;event(0x0101);CHECK(request_count==before && vp[FW_UI_EVENT_VP]==0);
  page=27;idle_active=0;wake_blocked=1;event(0x0101);CHECK(request_count==before);
- wake_blocked=0;FwProtocolTask();CHECK(vp[FW_EDIT_VP]==21);
- event(0x0300);CHECK(requests[request_count-1].address==0 && requests[request_count-1].value==21);
+ wake_blocked=0;FwProtocolTask();CHECK(vp[FW_EDIT_VP+10]==1);
+ event(0x0300);CHECK(requests[request_count-1].address==10 && requests[request_count-1].value==1);
 }
 static void refresh_device(void) { advance(1000);finish_snapshot();advance(100); }
 static void pass_digits(const char *s) { while(*s)event(0x0510+(uint16_t)(*s++-'0')); }
@@ -412,12 +429,11 @@ static void test_password_draft_and_timer_lid(void) {
  CHECK(vp[FW_UI_PASS_RECORD+2]==1 && vp[FW_UI_PASS_RECORD+3]==1 && vp[FW_UI_PASS_RECORD+5]==0);
  original=vp[FW_UI_PASS_RECORD+6];vp[FW_UI_PASS_ENABLE]=0;event(0x0301);reply();FwProtocolTask();finish_snapshot();
  CHECK(vp[FW_UI_PASS_RECORD+2]==1 && vp[FW_UI_PASS_RECORD+6]==original);
- online();go(2);vp[0x37A0]=1;vp[0x37A1]=0;vp[0x37A2]=1;event(0x0300);FwProtocolTask();
+ online();go(2);vp[0x37A0]=1;vp[0x37A1]=1;vp[0x37A2]=1;event(0x0300);FwProtocolTask();
  device[39]=3;device[82]=1;device[37]=1;device[42]=1;refresh_device();
- before=request_count;advance(61000);finish_snapshot();
- CHECK(device[14]==0 && vp[0x37A4]==5);
- while(before<request_count) {CHECK(requests[before].command!=6 || requests[before].address!=14);++before;}
- device[42]=0;refresh_device();CHECK(device[14]==40);
+ before=request_count;vp[0x12]=0x0101;advance(100);finish_snapshot();
+ CHECK(device[14]==40 && vp[0x37A4]==6);
+ CHECK(request_count>before);
 }
 static void check_home(uint16_t e,uint16_t address,uint16_t value) {
  unsigned before=request_count;
@@ -550,20 +566,24 @@ static void test_password_other_pages_and_wrap(void) {
 }
 static void test_cylinder_temperature_text(void) {
  unsigned before;
- reset();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"--/--"));
- FwProtocolTask();finish_snapshot();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"0.0/-5.0"));
- device[30]=(uint16_t)-123;refresh_device();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3/-5.0"));
+ reset();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"--") && text_is(FW_UI_SET_TEMP_TEXT_VP,"--"));
+ FwProtocolTask();finish_snapshot();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"0.0") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-5.0"));
+ device[30]=(uint16_t)-123;refresh_device();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-5.0"));
  CHECK(text_is(0x3724,"-12.3"));
+ /* Live FW5 changes must refresh on home/running pages without visiting settings. */
+ device[5]=(uint16_t)-77;refresh_device();
+ CHECK(page==42 && text_is(FW_UI_SET_TEMP_TEXT_VP,"-7.7"));
+ device[5]=(uint16_t)-50;refresh_device();
  go(2);vp[FW_EDIT_VP+5]=(uint16_t)-65;advance(100);
- CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3/-5.0"));
+ CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-5.0"));
  event(0x0300);reply();FwProtocolTask();finish_snapshot();
- CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3/-6.5"));
+ CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-12.3") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-6.5"));
  go(42);device[16]=6;device[30]=(uint16_t)-30;refresh_device();
- CHECK(page==6 && text_is(FW_UI_CYLINDER_TEXT_VP,"-3.0/-6.5"));
- device[30]=0x8000;refresh_device();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-3276.8/-6.5"));
- CHECK(vp[FW_UI_CYLINDER_TEXT_VP+8]==0);
+ CHECK(page==6 && text_is(FW_UI_CYLINDER_TEXT_VP,"-3.0") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-6.5"));
+ device[30]=0x8000;refresh_device();CHECK(text_is(FW_UI_CYLINDER_TEXT_VP,"-3276.8") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-6.5"));
+ CHECK(vp[FW_UI_CYLINDER_TEXT_VP+4]==0);
  advance(1000);before=request_count;advance(500);
- CHECK(request_count==before && text_is(FW_UI_CYLINDER_TEXT_VP,"--/--"));
+ CHECK(request_count==before && text_is(FW_UI_CYLINDER_TEXT_VP,"--") && text_is(FW_UI_SET_TEMP_TEXT_VP,"-6.5"));
 }
 static void test_running_temperature_pages(void) {
  static const int16_t temperatures[]={-31,-30,-29,0,100,-300};
@@ -604,9 +624,12 @@ static void test_manual_video_entry(void) {
  online();event(0x0400);CHECK(page==120);advance(60000);finish_snapshot();CHECK(page==120);
  event(0x0401);CHECK(page==9);
 }
+#include "fw_update_cases.h"
 int main(void) {
+ void (*updates[])(void)={test_setting_temperature_independent,test_advanced_cancel_delayed,test_alarm_batch_clear,test_power_return_offline,test_alarm_timestamp,test_admin_delayed_page_switch,test_daily_leading_zero,test_daily_schedule,test_daily_offline_and_migration,test_admin_password,test_admin_save_failure_and_factory_login,test_admin_backup_and_locked_pause_return,test_pause_controls,test_pause_queued_changes,test_defrost_display,test_power_alarm_confirmation,test_clock_and_level_settings,test_clock_page_drafts_and_schedule};
  void (*tests[])(void)={test_initial_and_poll,test_units_signed_and_bounds,test_edit_refresh_cancel,test_save_snapshot_and_repeat,test_partial_failure_and_recovery,test_read_timeout_cancels_queued_action,test_no_command_retry_and_fast_clicks,test_pages_local_and_unknown,test_alarm_mapping,test_warning_pages_and_return,test_warning_clear_fixed_mapping,test_warning_clear_invalid_and_timeout,test_warning_clear_queued_page_change,test_component_gates_and_noops,test_parser_split_crc_and_deadline,test_usb_independent};
- unsigned i;for(i=0;i<sizeof(tests)/sizeof(tests[0]);i++){tests[i]();if(failed_line){printf("FAIL scenario %u line %u\n",i+1,failed_line);return 1;}}
+ unsigned i;for(i=0;i<sizeof(updates)/sizeof(updates[0]);i++){updates[i]();if(failed_line){printf("FAIL update scenario %u line %u\n",i+1,failed_line);return 1;}}
+ for(i=0;i<sizeof(tests)/sizeof(tests[0]);i++){tests[i]();if(failed_line){printf("FAIL scenario %u line %u\n",i+1,failed_line);return 1;}}
  test_result_belongs_to_original_page();if(failed_line){printf("FAIL page result line %u\n",failed_line);return 1;}++i;
  test_idle_keeps_edit_session_and_blocks_wake_action();if(failed_line){printf("FAIL idle edit line %u\n",failed_line);return 1;}++i;
  test_start_conditions();if(failed_line){printf("FAIL conditions line %u\n",failed_line);return 1;}++i;
@@ -625,5 +648,5 @@ int main(void) {
  test_cylinder_temperature_text();if(failed_line){printf("FAIL cylinder text line %u\n",failed_line);return 1;}++i;
  test_running_temperature_pages();if(failed_line){printf("FAIL running temperature line %u\n",failed_line);return 1;}++i;
  test_password_cancel_touch_release();if(failed_line){printf("FAIL cancel touch line %u\n",failed_line);return 1;}++i;
- printf("FW: %u scenarios, %u assertions passed\n",i,checks);return 0;
+ printf("FW: %u scenarios, %u assertions passed\n",i+(unsigned)(sizeof(updates)/sizeof(updates[0])),checks);return 0;
 }

@@ -36,10 +36,10 @@
  */
 static uint8_t RtcCalcWeek(uint8_t *prtc_set)
 {
-    uint8_t year = prtc_set[0] +2000;
+    uint16_t year = (uint16_t)prtc_set[0] +2000U;
     uint8_t month = prtc_set[1];
     uint8_t day = prtc_set[2];
-    uint8_t zeller;
+    uint16_t zeller;
 
     if(month < 3)
     {
@@ -242,9 +242,8 @@ void RtcInit(void)
 void RtcReadTime(void)
 {
     uint8_t read_param[8],write_param[8];
-    uint8_t i;
     I2cReadMultipleBytes(0x00, read_param, 7);
-    RtcGetTime(write_param, read_param);
+    RtcGetTime(read_param, write_param);
     write_dgus_vp(0x0010, write_param, 4);
 }
 

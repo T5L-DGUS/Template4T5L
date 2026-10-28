@@ -22,5 +22,8 @@ void R11VideoTouchTask(uint16_t);
 uint8_t R11VideoIdleActive(void);
 uint16_t R11VideoIdleReturnPage(void);
 uint8_t R11VideoWakeBlocked(void);
+void RtcSetTime(uint8_t *);
+void RtcReadTime(void);
+void FwTestRecordStore(uint16_t,uint8_t);
 #include "../modules/fw_protocol.h"
 #endif

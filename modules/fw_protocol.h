@@ -16,6 +16,8 @@
 #define FW_UI_RESULT_VP    0x3711
 #define FW_UI_READY_VP     0x3712
 #define FW_UI_ALARM_VP     0x3713
+/* GBK text: YYYY-MM-DD HH:MM:SS, two spaces, alarm; 64 bytes. */
+#define FW_UI_ALARM_TEXT_VP 0x38C0
 #define FW_UI_STATUS_VP    0x3714
 #define FW_UI_MODE_VP      0x371C
 #define FW_UI_PARTS_VP     0x371D
@@ -36,9 +38,24 @@
 #define FW_UI_PASS_MASK    0x3832
 #define FW_UI_PASS_SET     0x3836
 #define FW_UI_PASS_RECORD  0x3840
-/* ASCII current/set cylinder temperature, 16 bytes (8 words). */
+/* Independent signed ASCII temperatures, each 8 bytes (4 words), no separator. */
 #define FW_UI_CYLINDER_TEXT_VP 0x3850
+#define FW_UI_SET_TEMP_TEXT_VP 0x3858
 #define FW_UI_PASS_PAGE    142
+#define FW_UI_PAUSE_STATE  0x3860
+#define FW_UI_CLEAN_STATE  0x3861
+#define FW_UI_DEFROST_STATE 0x3862
+#define FW_UI_POWER_STATE  0x3863
+#define FW_UI_MODE_DISPLAY 0x3864
+#define FW_UI_CLOCK_PAGE   143
+#define FW_UI_CLOCK_EDIT   0x3870
+#define FW_UI_CLOCK_RESULT 0x3876
+#define FW_UI_CLOCK_TEXT   0x38A0
+#define FW_ADMIN_RECORD    0x3880
+#define FW_ADMIN_BACKUP_RECORD 0x3888
+#define FW_DAILY_RECORD    0x3890
+#define FW_FACTORY_PASSWORD 243546UL
+#define FW_ADMIN_DEFAULT   123456UL
 #define FW_UI_RUN_EVENT    0x0104
 #define FW_UI_PASS_TIMEOUT_MS 60000UL
 #define USB_VIDEO_VP       0x3780
