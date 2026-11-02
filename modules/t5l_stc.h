@@ -93,6 +93,11 @@ typedef enum
 #define PLASMA_CMDWORD 0x610A
 #define HUMIDIFIER_CMDWORD 0x610B
 #define LOCK_CMDWORD 0x610C
+
+
+#define SM_FAN_CMDWORD 0x610D
+#define MIC_LED_CMDWORD 0x610E
+#define CAMERA_LED_CMDWORD 0x610F
 //////////////////////////////////////////////////////////////
 typedef enum
 {
@@ -232,9 +237,12 @@ typedef struct
 typedef struct
 {
     uint16_t enable;    // UVC紫外线消杀总开关0关1开
+    uint16_t target_enable;    // UVC紫外线消杀总开关0关1开
     uint16_t running_time_h;   // 单次运行时长h
     uint32_t running_time_s;
-    uint8_t lock_enable;
+
+    uint8_t remind_flag; //1闭锁允许  2开锁禁止
+    uint8_t lock_enable;  //1允许  0禁止
     uint8_t run_status; // 1关闭运行 2开启运行
     uint8_t running;
 } St_Uvc;
@@ -277,7 +285,7 @@ typedef struct
     uint16_t temp_uint;   //温度单位 1=°C   2=°F
     uint16_t volume;      //音量
     uint16_t screen_save; // 1屏保  2息屏 3无
-    uint16_t language;
+    uint16_t language; //1中文  2英文  3韩文  4日语
     uint8_t passwd[7];
     uint8_t save_flag;
     uint16_t save_interval_times;
@@ -288,7 +296,7 @@ typedef struct
 {
     uint16_t enable;
     uint8_t running;
-} ST_PLASMA;
+} ST_COM;
 
 //负离子
 typedef struct _nai
@@ -332,13 +340,16 @@ typedef struct
     St_Uvc UVC;
     St_Uvb UVB;
     St_IR IR;
-    ST_PLASMA Plasma;
-    ST_ANION Anion;
+    ST_COM Plasma;
+    ST_COM Anion;
     ST_LOCK Lock;
+    ST_COM Small_Fan;
+    ST_COM MicLed;
+    ST_COM CameraLed;
     St_Sensor environment;
     St_LinkFlag link_flag; // 模块联动控制标志位
     SYS_CONFIG Cfg;
-
+    uint8_t dev_enable;
 } DeviceCtrl;
 
 extern DeviceCtrl G_Device_Ctrl;
@@ -368,7 +379,8 @@ void Start_Once_SaveData();
 void T5l_Stc_UartRxProcess(uint16_t addr);
 void STC_ReporData_Procese(uint32_t addr);
 uint8_t check_passwd_format(uint8_t *u8buf );
-void set_filter_month();
+
+
 void Exhaust_On();
 void Exhaust_Off(uint8_t auto_flag);
 void InWind_On(uint16_t speed);
@@ -383,10 +395,27 @@ void UVB_On(uint16_t target_brightness);
 void UVB_Off(uint8_t auto_flag);
 void Humidifier_On();
 void Humidifier_Off(uint8_t auto_flag);
-void Anion_On(void);
-void Anion_Off(void);
-void Plasma_On(void);
-void Plasma_Off(void);
+// void Anion_On(void);
+// void Anion_Off(void);
+// void Plasma_On(void);
+// void Plasma_Off(void);
+
+
+// void SMALL_FAN_On();
+// void SMALL_FAN_Off();
+// void MicLed_On();
+// void MicLed_Off();
+// void CameraLed_On();
+// void CameraLed_Off();
+
+void Dev_Switch_Ctrl(uint16_t *pEnable, uint16_t cmdWord, uint8_t bOn);
+
+
+
 void Mult_Task();
 void PageFunction(void);
+
+void Set_Temperature_Unit(uint16_t Unit);
+void Language_Init(uint16_t language_tpye);
+
 #endif

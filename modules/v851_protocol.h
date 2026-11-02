@@ -16,6 +16,7 @@
 /* Compatibility form observed with 0x6C in the command byte. */
 #define V851_TLV_CMD_BOOTSTRAP_RESULT_COMPAT     0x6CU
 #define V851_TLV_CMD_EVENT_ALARM                 0x38U
+#define V851_TLV_CMD_FACTORY_RESET               0x39U
 
 #define V851_TLV_FRAME_MAX                       2048U
 #define V851_TLV_FRAME_FIXED_SIZE                5U
@@ -47,6 +48,9 @@
 #define V851_TLV_STRUCT_FACTORY_REJECTION        0x6BU
 #define V851_TLV_STRUCT_BOOTSTRAP_RESULT         0x6CU
 #define V851_TLV_STRUCT_EVENT_ALARM              0x6DU
+#define V851_TLV_STRUCT_FACTORY_RESET            0x6EU
+#define V851_TLV_TAG_RESET_ACTION                0x01U
+#define V851_TLV_RESET_WIFI_AND_UNBIND           0x01U
 
 /* PowerState. */
 #define V851_TLV_TAG_POWER_MODE                  0x01U
@@ -123,6 +127,7 @@
 #define V851_TLV_TAG_FW_VERSION                  0x01U
 #define V851_TLV_TAG_HW_VERSION                  0x02U
 #define V851_TLV_TAG_CONFIG_VERSION              0x03U
+#define V851_TLV_TAG_LATEST_FW_VERSION           0x04U
 #define V851_TLV_TAG_STORAGE_TOTAL               0x01U
 #define V851_TLV_TAG_STORAGE_FREE                0x02U
 /* Factory data. */
@@ -193,6 +198,7 @@ typedef enum
 void V851ProtocolInit(void);
 void V851ProtocolTask(void);
 void V851ProtocolRequestFactoryReport(void);
+void V851ProtocolRequestFactoryReset(void);
 void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len);
 uint8_t V851ProtocolSendSegments(uint8_t command,
                                  const V851TlvSegment *segments,

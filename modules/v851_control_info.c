@@ -561,13 +561,13 @@ static void V851ControlInfoApplySwitch(uint8_t struct_type,
             break;
 
         case V851_TLV_STRUCT_ANION:
-            if(enabled != 0U) Anion_On();
-            else Anion_Off();
+            if(enabled != 0U) Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable, ANION_CMDWORD, 1U);
+            else Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable, ANION_CMDWORD, 0U);
             break;
 
         case V851_TLV_STRUCT_PLASMA:
-            if(enabled != 0U) Plasma_On();
-            else Plasma_Off();
+            if(enabled != 0U) Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable, PLASMA_CMDWORD, 1U);
+            else Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable, PLASMA_CMDWORD, 0U);
             break;
 
         case V851_TLV_STRUCT_CLIMATE:

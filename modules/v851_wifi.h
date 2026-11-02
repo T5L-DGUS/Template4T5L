@@ -19,6 +19,7 @@
 #define V851_WIFI_CMD_STATUS                     0xC5U
 
 void V851WifiInit(void);
+void V851WifiClearCredentials(void);
 void V851WifiTask(void);
 void V851WifiReceiveFrame(const uint8_t *frame, uint16_t len);
 
