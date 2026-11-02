@@ -256,7 +256,7 @@ typedef            long			int32_t;
     #if uartUART4_TIMEOUT_ENABLED
         #define uartUART4_TIMEOUTSET     5
     #endif  /* uartUART4_TIMEOUT_ENABLED */   
-    #define uartUART4_BAUDRATE           115200
+    #define uartUART4_BAUDRATE           921600
     #define uartUART4_485_ENABLED        0
     
     #if uartUART4_485_ENABLED

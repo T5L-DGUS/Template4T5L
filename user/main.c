@@ -2,6 +2,7 @@
 #include "uart.h"
 #include "timer.h"
 #include "t5l_stc.h"
+#include "boot_handoff.h"
 
 #if v851PROTOCOL_ENABLED
 #include "v851_protocol.h"
@@ -27,6 +28,7 @@ void main(void)
 
 
 	T5LCpuInit();
+	BootHandoffInit();
 	T5l_Stc_Init();
 
 	#if v851PROTOCOL_ENABLED
@@ -38,6 +40,7 @@ void main(void)
 	SysTaskAdd(0, RTC_INTERVAL, RtcTask);
 
 	SysTaskAdd(2, UART_TASK_INTERVAL, UartProtocalHandleTask);
+	SysTaskAdd(6, BOOT_HANDOFF_TASK_INTERVAL, BootHandoffTask);
 
 	#if v851PROTOCOL_ENABLED
 	SysTaskAdd(3, V851_WIFI_TASK_INTERVAL, V851WifiTask);
