@@ -28,3 +28,7 @@
 !/tests/test_v851_reset_firmware.py
 !/tests/v851_reset_firmware_harness.c
 !/docs/t5l_factory_reset_firmware.md
+
+# Application startup/restart handshake contract and regression cases
+!/tests/v851_handshake_cases.h
+!/docs/t5l_v851_handshake.md

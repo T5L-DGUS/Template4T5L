@@ -138,7 +138,6 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
     V851TlvFieldCursor cursor;
     V851TlvField field;
     V851TlvIterResult result;
-    uint16_t address;
     uint16_t length;
     uint8_t text[V851_FIRMWARE_VP_WORDS * 2U];
 
@@ -156,15 +155,8 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
     V851TlvFieldCursorInit(&cursor, segment->payload, segment->length);
     while(V851TlvFieldNext(&cursor, &field) == V851_TLV_ITER_FIELD)
     {
-        if(field.tag == V851_TLV_TAG_FW_VERSION)
-        {
-            address = V851_FIRMWARE_CURRENT_VP;
-        }
-        else if(field.tag == V851_TLV_TAG_LATEST_FW_VERSION)
-        {
-            address = V851_FIRMWARE_LATEST_VP;
-        }
-        else
+        /* V851 tag 0x04 is the actual current version; mirror both displays. */
+        if(field.tag != V851_TLV_TAG_CURRENT_FW_VERSION)
         {
             continue;
         }
@@ -178,7 +170,8 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
         {
             memcpy(text, field.value, length);
         }
-        write_dgus_vp(address, text, V851_FIRMWARE_VP_WORDS);
+        write_dgus_vp(V851_FIRMWARE_CURRENT_VP, text, V851_FIRMWARE_VP_WORDS);
+        write_dgus_vp(V851_FIRMWARE_LATEST_VP, text, V851_FIRMWARE_VP_WORDS);
     }
 }
 

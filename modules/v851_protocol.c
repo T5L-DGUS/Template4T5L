@@ -61,6 +61,31 @@ static uint16_t xdata v851_alarm_reported[V851_ALARM_VP_COUNT];
 static uint8_t v851_alarm_next_index;
 static uint32_t v851_alarm_scan_tick;
 
+static uint8_t v851_startup_pending;
+static uint8_t v851_peer_boot_received;
+
+uint8_t V851ProtocolPeerBootReceived(void)
+{
+    return v851_peer_boot_received;
+}
+
+static uint8_t V851ProtocolServiceStartupTx(void)
+{
+    uint8_t frame[9] = {
+        V851_FRAME_MAGIC_HIGH, V851_FRAME_MAGIC_LOW, 0U, 5U,
+        V851_TLV_CMD_PROPERTY, V851_TLV_STRUCT_HANDSHAKE, 0U, 1U, 1U
+    };
+
+    if(v851_startup_pending == 0U)
+    {
+        return 0U;
+    }
+    /* Called only after UART4 is idle. One notice per application startup. */
+    UartSendData(&Uart4, frame, sizeof(frame));
+    v851_startup_pending = 0U;
+    return 1U;
+}
+
 static void V851WriteBe16(uint8_t *bytes, uint16_t value)
 {
     bytes[0] = (uint8_t)(value >> 8);
@@ -433,6 +458,8 @@ static uint8_t V851ProtocolValidateFields(const uint8_t *field_bytes,
 void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len)
 {
     V851TlvSegment segment;
+    V851TlvFieldCursor cursor;
+    V851TlvField field;
     uint16_t declared_length;
     uint16_t segment_length;
     uint16_t offset;
@@ -517,6 +544,19 @@ void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len)
             (void)V851ControlInfoApplySegment(segment.struct_type,
                                                segment.payload,
                                                segment.length);
+        }
+        if((command == V851_TLV_CMD_PROPERTY) &&
+           (segment.struct_type == V851_TLV_STRUCT_FIRMWARE))
+        {
+            V851TlvFieldCursorInit(&cursor, segment.payload, segment.length);
+            while(V851TlvFieldNext(&cursor, &field) == V851_TLV_ITER_FIELD)
+            {
+                if(field.tag == V851_TLV_TAG_CURRENT_FW_VERSION)
+                {
+                    /* V851 announces startup with its standard firmware data. */
+                    v851_peer_boot_received = 1U;
+                }
+            }
         }
         V851TlvApplicationSegment(command, &segment);
         offset = (uint16_t)(offset + V851_TLV_SEGMENT_HEADER_SIZE +
@@ -905,6 +945,11 @@ static void V851ProtocolServiceTx(void)
     {
         return;
     }
+    if((V851ProtocolFactoryResetBusy() == 0U) &&
+       (V851ProtocolServiceStartupTx() != 0U))
+    {
+        return;
+    }
     if((v851_wifi_tx_count != 0U) &&
        (V851ProtocolFactoryResetBusy() == 0U))
     {
@@ -954,6 +999,8 @@ void V851ProtocolInit(void)
     v851_state_scan_tick = tick;
     v851_state_full_tick = tick;
     v851_alarm_scan_tick = tick;
+    v851_startup_pending = 1U;
+    v851_peer_boot_received = 0U;
 }
 
 void V851ProtocolTask(void)

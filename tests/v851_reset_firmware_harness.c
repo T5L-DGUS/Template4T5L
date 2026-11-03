@@ -13,7 +13,8 @@ static uint16_t sent_len[16];
 static unsigned sent_count, writes;
 static uint8_t hold_uart_busy;
 static unsigned flash_writes, flash_inits;
-uint32_t GetSysTick(void) { return 0; }
+static uint32_t mock_tick;
+uint32_t GetSysTick(void) { return mock_tick; }
 void SwitchPageById(uint8_t page) { (void)page; }
 void write_dgus_vp(uint32_t addr, const uint8_t *data, uint16_t words)
 { assert(addr + words <= 0x10000); memcpy(vp + addr * 2, data, words * 2); ++writes; }
@@ -30,6 +31,20 @@ uint8_t V851ControlInfoReportStructType(uint8_t i) { return i; }
 uint16_t V851ControlInfoBuildFields(uint8_t t, uint8_t *p, uint16_t n)
 { (void)t; (void)p; (void)n; return 0; }
 uint16_t V851ControlInfoScanChanged(void) { return 0; }
+
+/* Existing reset cases start after the independently tested startup frame. */
+static void InitAfterStartupHandshake(void)
+{
+    mock_tick = 0;
+    memset(&Uart4, 0, sizeof(Uart4));
+    hold_uart_busy = 0;
+    sent_count = 0;
+    V851ProtocolInit();
+    V851ProtocolTask();
+    assert(sent_count == 1 && sent_len[0] == 9 &&
+           sent[0][4] == 0x35 && sent[0][5] == 0x0A);
+    sent_count = 0;
+}
 
 static uint8_t compare_passwd(uint8_t *password) { return memcmp(password, "1234", 4) == 0; }
 static void Set_Input(uint8_t page, uint8_t control) { (void)page; (void)control; }
@@ -50,7 +65,7 @@ static void test_key_to_wire_before_flash(void)
 {
     unsigned i;
     uint16_t key = 0x2801;
-    V851ProtocolInit(); sent_count = flash_writes = flash_inits = 0;
+    InitAfterStartupHandshake(); sent_count = flash_writes = flash_inits = 0;
     hold_uart_busy = 1;
     /* Wrong password cannot send or erase settings. */
     memcpy(vp + 0x5366 * 2, "0000", 4);
@@ -102,7 +117,9 @@ static void firmware(const uint8_t *fields, uint16_t length)
 static void test_versions(void)
 {
     const uint8_t both[] = {1,0,5,'1','.','0','.','0',4,0,5,'2','.','0','.','0'};
-    const uint8_t shorter[] = {1,0,1,'3'};
+    const uint8_t shorter[] = {4,0,1,'3'};
+    const uint8_t legacy[] = {1,0,1,'X'};
+    const uint8_t reversed[] = {4,0,1,'4',1,0,1,'X'};
     const uint8_t empty[] = {4,0,0};
     const uint8_t malformed[] = {1,0,1,'X',4,0,4,'Y'};
     const uint8_t unknown[] = {2,0,1,'H',3,0,4,0,0,0,1,99,0,0};
@@ -111,14 +128,20 @@ static void test_versions(void)
     unsigned old_writes, i;
     memset(vp, 0xA5, sizeof(vp));
     firmware(both, sizeof(both));
-    assert(strcmp((char *)(vp + 0x5290 * 2), "1.0.0") == 0);
+    assert(strcmp((char *)(vp + 0x5290 * 2), "2.0.0") == 0);
     assert(strcmp((char *)(vp + 0x52A0 * 2), "2.0.0") == 0);
     firmware(shorter, sizeof(shorter));
     for(i = 1; i < 32; ++i) assert(vp[0x5290 * 2 + i] == 0);
     assert(vp[0x5290 * 2] == '3');
-    assert(strcmp((char *)(vp + 0x52A0 * 2), "2.0.0") == 0);
+    assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
+    old_writes = writes;
+    firmware(legacy, sizeof(legacy));
+    assert(writes == old_writes);
+    firmware(reversed, sizeof(reversed));
+    assert(vp[0x5290 * 2] == '4');
+    assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
     firmware(empty, sizeof(empty));
-    for(i = 0; i < 32; ++i) assert(vp[0x52A0 * 2 + i] == 0);
+    for(i = 0; i < 32; ++i) { assert(vp[0x52A0 * 2 + i] == 0); assert(vp[0x5290 * 2 + i] == 0); }
     old_writes = writes;
     firmware(malformed, sizeof(malformed));
     firmware(unknown, sizeof(unknown));
@@ -128,7 +151,7 @@ static void test_versions(void)
     { V851TlvSegment segment = {9, malformed, sizeof(malformed)};
       V851TlvApplicationSegment(0x35, &segment); assert(writes == old_writes); }
     memset(long_field, 'V', sizeof(long_field));
-    long_field[0] = 1; long_field[1] = 0;
+    long_field[0] = 4; long_field[1] = 0;
     for(i = 31; i <= 40; ++i)
     {
         unsigned j;
@@ -136,6 +159,7 @@ static void test_versions(void)
         firmware(long_field, (uint16_t)(i + 3));
         for(j = 0; j < 31; ++j) assert(vp[0x5290 * 2 + j] == 'V');
         assert(vp[0x5290 * 2 + 31] == 0);
+        assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
     }
     assert(vp[0x528F * 2] == 0xA5);
     assert(vp[0x52B0 * 2] == 0xA5);
@@ -151,7 +175,7 @@ static void test_reset(void)
     for(rotation = 0; rotation < 2; ++rotation)
     for(combination = 0; combination < 4; ++combination)
     {
-        V851ProtocolInit(); V851WifiInit(); sent_count = 0;
+        InitAfterStartupHandshake(); V851WifiInit(); sent_count = 0;
         if(rotation) { assert(V851ProtocolSendWifiFrame(scan, sizeof(scan))); V851ProtocolTask(); }
         sent_count = 0;
         Uart4.TxBusy = 1;
@@ -187,7 +211,7 @@ static void test_reset_crc_capacity(void)
 {
     static uint8_t fields[2039];
     V851TlvSegment segment = {0x6E, fields, sizeof(fields)};
-    V851ProtocolInit(); sent_count = 0;
+    InitAfterStartupHandshake(); sent_count = 0;
     assert(!V851ProtocolSendSegments(0x39, &segment, 1));
     segment.length = 2038;
     fields[0] = 1; fields[1] = 7; fields[2] = 0xF3;
@@ -198,9 +222,13 @@ static void test_reset_crc_capacity(void)
     V851ProtocolTask();
 }
 
+
+#include "v851_handshake_cases.h"
+
 int main(void)
 {
     test_versions(); test_reset(); test_reset_crc_capacity(); test_key_to_wire_before_flash();
-    puts("Production C firmware/reset behavior passed");
+    test_handshake();
+    puts("Production C firmware/reset/handshake behavior passed");
     return 0;
 }
