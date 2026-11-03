@@ -71,7 +71,8 @@ class V851StateAndWifiTests(unittest.TestCase):
 
     def test_two_slot_tlv_queue_and_priority_order(self) -> None:
         self.assertIn("#define V851_TLV_TX_DEPTH                         2U", self.protocol)
-        wifi = self.protocol.index("if(v851_wifi_tx_count != 0U)")
+        wifi = self.protocol.index("if((v851_wifi_tx_count != 0U)")
+        self.assertIn("(V851ProtocolFactoryResetBusy() == 0U)", self.protocol[wifi:])
         tlv = self.protocol.index("if(v851_tlv_tx_count != 0U)", wifi)
         self.assertLess(wifi, tlv)
         self.assertNotIn("v851_ota_tx", self.protocol)

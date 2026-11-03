@@ -199,6 +199,8 @@ void V851ProtocolInit(void);
 void V851ProtocolTask(void);
 void V851ProtocolRequestFactoryReport(void);
 void V851ProtocolRequestFactoryReset(void);
+/* Busy until the notification has drained from UART4; not a V851 ACK. */
+uint8_t V851ProtocolFactoryResetBusy(void);
 void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len);
 uint8_t V851ProtocolSendSegments(uint8_t command,
                                  const V851TlvSegment *segments,

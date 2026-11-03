@@ -255,9 +255,12 @@ def encode_tlv_frame(
     )
     if not encoded_segments:
         raise ValueError("a TLV frame needs at least one segment")
-    declared_length = 1 + len(encoded_segments)
+    crc_bytes = 2 if command == TLV_CMD_FACTORY_RESET else 0
+    declared_length = 1 + len(encoded_segments) + crc_bytes
     frame = AA55_MAGIC + declared_length.to_bytes(2, "big")
     frame += bytes([command]) + encoded_segments
+    if crc_bytes:
+        frame += crc16_modbus(frame[4:]).to_bytes(2, "little")
     if len(frame) > TLV_FRAME_MAX:
         raise ValueError("TLV frame exceeds 2048 bytes")
     return frame
@@ -339,21 +342,26 @@ def decode_tlv_frame(frame: bytes) -> DecodedFrame:
     if declared < 4 or len(frame) != 4 + declared or len(frame) > TLV_FRAME_MAX:
         raise ProtocolError("invalid TLV frame length")
 
+    payload_end = len(frame)
+    if command == TLV_CMD_FACTORY_RESET:
+        if len(frame) < 10 or crc16_modbus(frame[4:-2]) != int.from_bytes(frame[-2:], "little"):
+            raise ProtocolError("invalid factory reset CRC")
+        payload_end -= 2
     segments: list[TlvSegment] = []
     offset = 5
-    while offset < len(frame):
-        if len(frame) - offset < 3:
+    while offset < payload_end:
+        if payload_end - offset < 3:
             raise ProtocolError("truncated segment header")
         segment_length = int.from_bytes(frame[offset + 1 : offset + 3], "big")
         end = offset + 3 + segment_length
-        if end > len(frame):
+        if end > payload_end:
             raise ProtocolError("segment exceeds frame")
         payload = frame[offset + 3 : end]
         segments.append(TlvSegment(frame[offset], _decode_fields(payload), payload))
         offset = end
     if not segments:
         raise ProtocolError("empty TLV frame")
-    return DecodedFrame("tlv", command, frame, frame[5:], tuple(segments))
+    return DecodedFrame("tlv", command, frame, frame[5:payload_end], tuple(segments))
 
 
 def decode_bootstrap_result(frame: bytes) -> BootstrapResult:

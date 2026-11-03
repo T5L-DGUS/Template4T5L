@@ -54,6 +54,8 @@ static uint32_t v851_state_full_tick;
 
 static uint8_t v851_factory_report_pending;
 static uint8_t v851_factory_reset_pending;
+static uint8_t v851_factory_reset_queued;
+static uint8_t v851_factory_reset_draining;
 static uint16_t xdata v851_alarm_current[V851_ALARM_VP_COUNT];
 static uint16_t xdata v851_alarm_reported[V851_ALARM_VP_COUNT];
 static uint8_t v851_alarm_next_index;
@@ -293,6 +295,8 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
                                  uint8_t count)
 {
     uint16_t segment_bytes;
+    uint16_t crc_bytes;
+    uint16_t crc;
     uint16_t frame_length;
     uint16_t offset;
     uint8_t index;
@@ -309,6 +313,7 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
         return 0U;
     }
 
+    crc_bytes = (command == V851_TLV_CMD_FACTORY_RESET) ? 2U : 0U;
     segment_bytes = 0U;
     for(index = 0U; index < count; ++index)
     {
@@ -346,16 +351,18 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
                                    segments[index].length);
     }
     frame_length = (uint16_t)(V851_TLV_FRAME_FIXED_SIZE + segment_bytes);
-    if(frame_length > V851_TLV_FRAME_MAX)
+    if(frame_length > (V851_TLV_FRAME_MAX - crc_bytes))
     {
         return 0U;
     }
 
+    frame_length = (uint16_t)(frame_length + crc_bytes);
     slot = v851_tlv_tx_head;
     v851_tlv_tx[slot][0] = V851_FRAME_MAGIC_HIGH;
     v851_tlv_tx[slot][1] = V851_FRAME_MAGIC_LOW;
     /* 最新AA55协议的长度包含命令字，总帧长为4 + length。 */
-    V851WriteBe16(&v851_tlv_tx[slot][2], (uint16_t)(segment_bytes + 1U));
+    V851WriteBe16(&v851_tlv_tx[slot][2],
+                  (uint16_t)(segment_bytes + 1U + crc_bytes));
     v851_tlv_tx[slot][4] = command;
     offset = V851_TLV_FRAME_FIXED_SIZE;
     for(index = 0U; index < count; ++index)
@@ -369,6 +376,13 @@ uint8_t V851ProtocolSendSegments(uint8_t command,
                    segments[index].length);
             offset = (uint16_t)(offset + segments[index].length);
         }
+    }
+    if(crc_bytes != 0U)
+    {
+        /* CRC16/MODBUS over command + segments, low byte first. */
+        crc = crc_16(&v851_tlv_tx[slot][4], (uint16_t)(offset - 4U));
+        v851_tlv_tx[slot][offset++] = (uint8_t)crc;
+        v851_tlv_tx[slot][offset] = (uint8_t)(crc >> 8);
     }
     v851_tlv_tx_len[slot] = frame_length;
     v851_tlv_tx_head = (uint8_t)((v851_tlv_tx_head + 1U) % V851_TLV_TX_DEPTH);
@@ -552,6 +566,13 @@ static uint16_t V851ProtocolQueueStateMask(uint8_t command,
     return 0U;
 }
 
+uint8_t V851ProtocolFactoryResetBusy(void)
+{
+    return (uint8_t)((v851_factory_reset_pending != 0U) ||
+                     (v851_factory_reset_queued != 0U) ||
+                     (v851_factory_reset_draining != 0U));
+}
+
 void V851ProtocolRequestFactoryReset(void)
 {
     uint8_t read_slot;
@@ -559,6 +580,10 @@ void V851ProtocolRequestFactoryReset(void)
     uint8_t index;
     uint8_t kept;
 
+    if(V851ProtocolFactoryResetBusy() != 0U)
+    {
+        return;
+    }
     /* Compact the ring, retaining scan requests but removing old credentials. */
     read_slot = v851_wifi_tx_tail;
     write_slot = read_slot;
@@ -612,6 +637,7 @@ static uint8_t V851ProtocolServiceFactoryReset(void)
                                      &segment, 1U) != 0U)
         {
             v851_factory_reset_pending = 0U;
+            v851_factory_reset_queued = 1U;
         }
     }
     return 1U;
@@ -879,7 +905,8 @@ static void V851ProtocolServiceTx(void)
     {
         return;
     }
-    if(v851_wifi_tx_count != 0U)
+    if((v851_wifi_tx_count != 0U) &&
+       (V851ProtocolFactoryResetBusy() == 0U))
     {
         slot = v851_wifi_tx_tail;
         UartSendData(&Uart4, v851_wifi_tx[slot], v851_wifi_tx_len[slot]);
@@ -892,6 +919,11 @@ static void V851ProtocolServiceTx(void)
     {
         slot = v851_tlv_tx_tail;
         UartSendData(&Uart4, v851_tlv_tx[slot], v851_tlv_tx_len[slot]);
+        if(v851_tlv_tx[slot][4] == V851_TLV_CMD_FACTORY_RESET)
+        {
+            v851_factory_reset_queued = 0U;
+            v851_factory_reset_draining = 1U;
+        }
         v851_tlv_tx_tail = (uint8_t)((v851_tlv_tx_tail + 1U) %
                                      V851_TLV_TX_DEPTH);
         --v851_tlv_tx_count;
@@ -913,6 +945,8 @@ void V851ProtocolInit(void)
     v851_state_dirty_mask = 0U;
     v851_factory_report_pending = 0U;
     v851_factory_reset_pending = 0U;
+    v851_factory_reset_queued = 0U;
+    v851_factory_reset_draining = 0U;
     memset(v851_alarm_current, 0, sizeof(v851_alarm_current));
     memset(v851_alarm_reported, 0, sizeof(v851_alarm_reported));
     v851_alarm_next_index = 0U;
@@ -926,6 +960,15 @@ void V851ProtocolTask(void)
 {
     uint32_t tick;
 
+    /* Leave one task turn idle after the final byte before local flash work. */
+    if(v851_factory_reset_draining != 0U)
+    {
+        if((Uart4.TxBusy == 0U) && (Uart4.TxHead == Uart4.TxTail))
+        {
+            v851_factory_reset_draining = 0U;
+        }
+        return;
+    }
     tick = GetSysTick();
     if((V851ProtocolServiceFactoryReset() == 0U) &&
        (V851ProtocolServiceAlarm(tick) == 0U))

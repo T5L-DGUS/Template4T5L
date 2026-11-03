@@ -4,9 +4,9 @@
 /project/Objects
 /project/1.bat
 /project/T5L51.uvgui.*
-/tests
+/tests/*
 /tools
-/tests
+/tests/*
 
 # Local generation scripts and test harnesses
 /scripts/
@@ -23,3 +23,8 @@
 
 /resources
 /docs/*.md
+
+# Factory-reset wire contract and native regression harness
+!/tests/test_v851_reset_firmware.py
+!/tests/v851_reset_firmware_harness.c
+!/docs/t5l_factory_reset_firmware.md

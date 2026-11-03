@@ -44,7 +44,7 @@ class V851FactoryAlarmSourceTests(unittest.TestCase):
         self.assertIn("segments[index].struct_type != V851_TLV_STRUCT_EVENT_ALARM", self.protocol)
         self.assertIn("V851_TLV_CMD_EVENT_ALARM                 0x38U", self.protocol_h)
         self.assertIn("V851_TLV_STRUCT_EVENT_ALARM              0x6DU", self.protocol_h)
-        self.assertIn("(uint16_t)(segment_bytes + 1U)", self.protocol)
+        self.assertIn("(uint16_t)(segment_bytes + 1U + crc_bytes)", self.protocol)
 
     def test_alarm_scans_ten_words_every_500ms(self) -> None:
         self.assertIn("V851_ALARM_SCAN_INTERVAL_MS               500UL", self.protocol)

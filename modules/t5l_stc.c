@@ -88,6 +88,7 @@ uvb：（单独控制或单独连接端子）
 #endif
 DeviceCtrl G_Device_Ctrl;
 DeviceCtrl G_Back_Device_Ctrl;
+static uint8_t t5l_factory_reset_pending;
 
 #define WAIT_ACK_TIMEOUT 1000 //等待应答超时时间
 #define WAIT_ACK_ERROR_CNT 2  //等待应答错误次数
@@ -1217,8 +1218,37 @@ void Queue_Time_Check(void)
     }
 }
 
+static uint8_t T5lStcServiceFactoryReset(void)
+{
+    uint8_t clear_buffer[DATALEN];
+
+    if(t5l_factory_reset_pending == 0U)
+    {
+        return 0U;
+    }
+#if v851PROTOCOL_ENABLED
+    if(V851ProtocolFactoryResetBusy() != 0U)
+    {
+        return 1U;
+    }
+#endif
+    /* NOR operations mask interrupts: only start after UART4 has drained. */
+    t5l_factory_reset_pending = 0U;
+    memset(clear_buffer, 0, sizeof(clear_buffer));
+    nor_flash_write(MAIN_ADDR, clear_buffer, 8U / 2U);
+    nor_flash_write(BACK_ADDR, clear_buffer, 8U / 2U);
+    nor_flash_write(MAIN_DATA_ADDR, clear_buffer, DATALEN / 2U);
+    nor_flash_write(BACK_DATA_ADDR, clear_buffer, DATALEN / 2U);
+    Flash_DataInit();
+    return 1U;
+}
+
 void T5L_Stc_Poll(void)
 {
+    if(T5lStcServiceFactoryReset() != 0U)
+    {
+        return;
+    }
     Queue_Pop_Poll();
     Queue_Sta_Poll();
     DeRun_Auto();
@@ -2278,14 +2308,8 @@ void key_scanf(void)
 #if v851PROTOCOL_ENABLED
                 V851ProtocolRequestFactoryReset();
 #endif
+                t5l_factory_reset_pending = 1U;
                 SwitchPageById(29);
-                memset(u8buf,0,32);
-                // 复制到备份
-                nor_flash_write(MAIN_ADDR, (uint8_t *)&u8buf, 8/2);
-                nor_flash_write(BACK_ADDR, (uint8_t *)&u8buf, 8/2);
-                nor_flash_write(MAIN_DATA_ADDR, (uint8_t *)&u8buf, DATALEN / 2);
-                nor_flash_write(BACK_DATA_ADDR, (uint8_t *)&u8buf, DATALEN / 2);
-                Flash_DataInit();
             }
             else
             {
