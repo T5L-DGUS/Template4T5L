@@ -20,7 +20,7 @@ class UartRoutingTests(unittest.TestCase):
         cls.project = (REPO_ROOT / "project/T5L51.uvproj").read_text(encoding="utf-8")
 
     def test_tlv_uart_buffers_have_exact_budget_and_guards(self) -> None:
-        for config in (self.config, self.config_t5f):
+        for config, baudrate in ((self.config, 921600), (self.config_t5f, 115200)):
             for expected in (
                 "#define v851PROTOCOL_ENABLED             1",
                 "#define uartUART2_ENABLED               1",
@@ -29,7 +29,7 @@ class UartRoutingTests(unittest.TestCase):
                 "#define uartUART_COMMON_FRAME_SIZE     2048",
                 "#define uartUART4_RXBUF_SIZE         2049",
                 "#define uartUART4_TXBUF_SIZE         2049",
-                "#define uartUART4_BAUDRATE           115200",
+                f"#define uartUART4_BAUDRATE           {baudrate}",
                 "uartUART_COMMON_FRAME_SIZE < 2048U",
                 "uartUART4_RXBUF_SIZE <= 2048U",
                 "uartUART4_TXBUF_SIZE <= 2048U",
@@ -45,12 +45,11 @@ class UartRoutingTests(unittest.TestCase):
         for removed in ("Ota", "Pb03f", "R11", "4G_air780e", "core_json"):
             self.assertNotIn(removed, self.main)
 
-    def test_uart4_dispatches_tlv_wifi_and_boot_handoff(self) -> None:
+    def test_uart4_dispatches_tlv_wifi_and_dgus(self) -> None:
         self.assertIn("V851 RX length includes the command byte", self.uart)
         self.assertIn("V851ProtocolReceiveFrame(&frame[frame_offset]", self.uart)
         self.assertIn("V851WifiReceiveFrame(&frame[frame_offset]", self.uart)
-        self.assertIn("BootHandoffIsUpgradeFrame(&frame[frame_offset]", self.uart)
-        self.assertIn("BootHandoffRequestUpgrade();", self.uart)
+        self.assertIn("UartStandardDwin8283Protocal(uart, &frame[frame_offset]", self.uart)
         self.assertNotIn("OtaReceive", self.uart)
         self.assertNotIn("V851_OTA_FRAME_MAX", self.protocol_h)
         self.assertNotIn("V851ProtocolSendOtaFrame", self.protocol + self.protocol_h)

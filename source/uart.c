@@ -25,7 +25,6 @@
 #include "v851_wifi.h"
 #endif /* v851PROTOCOL_ENABLED */
 
-#include "boot_handoff.h"
 
 #if uartUART2_ENABLED
 UART_TYPE Uart2;
@@ -436,8 +435,8 @@ void UartReadFrame(UART_TYPE *uart)
 {
     static uint8_t xdata frame[uartUART_COMMON_FRAME_SIZE];
     uint16_t i,rx_head_bak,one_frame_len,total_frame_len,frame_offset;
-    uint16_t body_len;
     #if v851PROTOCOL_ENABLED
+    uint16_t body_len;
     uint8_t command;
     #endif /* v851PROTOCOL_ENABLED */
     if(uart->RxFlag == UART_NON_REC)
@@ -574,34 +573,6 @@ void UartReadFrame(UART_TYPE *uart)
                 {
                     i--;
                 }
-            }
-            else if((uart == &Uart4) &&
-                    (frame[frame_offset] == 0xAB) &&
-                    (frame[frame_offset + 1U] == 0xCD))
-            {
-                if(i < 5U)
-                {
-                    break;
-                }
-                body_len = ((uint16_t)frame[frame_offset + 2U] << 8) |
-                           frame[frame_offset + 3U];
-                if((body_len < 1U) ||
-                   (body_len > (BOOT_HANDOFF_FILE_INFO_MAX - 4U)))
-                {
-                    i--;
-                    continue;
-                }
-                one_frame_len = (uint16_t)(body_len + 4U);
-                if(i < one_frame_len)
-                {
-                    break;
-                }
-                if(BootHandoffIsUpgradeFrame(&frame[frame_offset],
-                                             one_frame_len) != 0U)
-                {
-                    BootHandoffRequestUpgrade();
-                }
-                i -= one_frame_len;
             }
             #if uartMODBUS_PROTOCOL_ENABLED
             else if(frame[frame_offset] == modbusSLAVE_ADDRESS)
