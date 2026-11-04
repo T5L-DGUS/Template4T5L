@@ -129,8 +129,8 @@ const V851BootstrapResult *V851BootstrapResultGet(void)
     return &v851_bootstrap_result;
 }
 
-#define V851_FIRMWARE_CURRENT_VP                 0x5290U
-#define V851_FIRMWARE_LATEST_VP                  0x52A0U
+#define V851_FIRMWARE_CURRENT_VP                 0x5390U
+#define V851_FIRMWARE_LATEST_VP                  0x53A0U
 #define V851_FIRMWARE_VP_WORDS                   16U
 
 static void V851FirmwareApplySegment(const V851TlvSegment *segment)
