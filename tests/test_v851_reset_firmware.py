@@ -45,6 +45,12 @@ class ResetFirmwareTests(unittest.TestCase):
         self.assertLess(poll.index('T5lStcServiceFactoryReset()'), poll.index('Flash_SaveData()'))
 
     def test_production_c_behavior(self):
+        self.run_c_harness()
+
+    def test_network_status(self):
+        self.run_c_harness('network')
+
+    def run_c_harness(self, *args):
         compiler = os.environ.get('HOST_CC') or shutil.which('clang') or shutil.which('gcc')
         local = Path('D:/youngwork/tools/llvm-mingw-20250709-ucrt-x86_64/bin/clang.exe')
         if not compiler and local.exists():
@@ -106,5 +112,5 @@ static void TestResetKeyScan(void)
                        '-o', str(executable)]
             built = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            result = subprocess.run([str(executable), *args], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

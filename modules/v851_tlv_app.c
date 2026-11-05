@@ -175,7 +175,78 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
     }
 }
 
-/* Single project hook for Bootstrap and firmware display. */
+#define V851_NETWORK_STATUS_VP                   0x5201U
+#define V851_MQTT_CONNECTED_VP                   0x5202U
+
+static uint8_t V851NetworkHasIpv4(const V851TlvField *field)
+{
+    uint8_t index, digits, dots, nonzero;
+    uint16_t octet;
+
+    if((field->length < 7U) || (field->length > 15U))
+    {
+        return 0U;
+    }
+    digits = dots = nonzero = 0U;
+    octet = 0U;
+    for(index = 0U; index < field->length; ++index)
+    {
+        uint8_t ch = field->value[index];
+        if(ch == '.')
+        {
+            if((digits == 0U) || (++dots > 3U))
+            {
+                return 0U;
+            }
+            digits = 0U;
+            octet = 0U;
+        }
+        else
+        {
+            if((ch < '0') || (ch > '9') || (++digits > 3U))
+            {
+                return 0U;
+            }
+            octet = octet * 10U + (ch - '0');
+            if(octet > 255U)
+            {
+                return 0U;
+            }
+            nonzero |= (ch != '0');
+        }
+    }
+    return (dots == 3U) && (digits != 0U) && nonzero;
+}
+
+static void V851NetworkApplySegment(const V851TlvSegment *segment)
+{
+    V851TlvFieldCursor cursor;
+    V851TlvField field;
+    V851TlvIterResult result;
+    uint16_t has_ip = 0U;
+    uint16_t mqtt_connected = 0U;
+    uint16_t status[2];
+
+    V851TlvFieldCursorInit(&cursor, segment->payload, segment->length);
+    while((result = V851TlvFieldNext(&cursor, &field)) == V851_TLV_ITER_FIELD)
+    {
+        if(field.tag == V851_TLV_TAG_NETWORK_IPV4)
+        {
+            has_ip = V851NetworkHasIpv4(&field);
+        }
+        else if(field.tag == V851_TLV_TAG_NETWORK_MQTT_CONNECTED)
+        {
+            mqtt_connected = (field.length == 1U) && (field.value[0] == 1U);
+        }
+    }
+    if(result == V851_TLV_ITER_END)
+    {
+        status[0] = has_ip ? 1U : 0U;
+        status[1] = mqtt_connected ? 1U : 0U;
+        write_dgus_vp(V851_NETWORK_STATUS_VP, status, 2U);
+    }
+}
+
 void V851TlvApplicationSegment(uint8_t command,
                                const V851TlvSegment *segment)
 {
@@ -190,6 +261,12 @@ void V851TlvApplicationSegment(uint8_t command,
             (segment->struct_type == V851_TLV_STRUCT_FIRMWARE))
     {
         V851FirmwareApplySegment(segment);
+    }
+    else if((command == V851_TLV_CMD_PROPERTY) &&
+            (segment != NULL) &&
+            (segment->struct_type == V851_TLV_STRUCT_NETWORK))
+    {
+        V851NetworkApplySegment(segment);
     }
 }
 

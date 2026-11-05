@@ -225,8 +225,45 @@ static void test_reset_crc_capacity(void)
 
 #include "v851_handshake_cases.h"
 
-int main(void)
+static void test_network_status(void)
 {
+    uint8_t sample[] = {
+        0xAA,0x55,0,0x2B,0x35,2,0,0x27,
+        1,0,1,1, 2,0,5,'w','l','a','n','0', 3,0,4,0,0,0,0,
+        4,0,13,'1','9','2','.','1','6','8','.','1','.','1','0','5', 5,0,1,0
+    };
+    uint8_t offline[] = {0xAA,0x55,0,18,0x35,2,0,14,5,0,1,0,4,0,7,'0','.','0','.','0','.','0'};
+    const uint8_t empty_ip[] = {0xAA,0x55,0,11,0x35,2,0,7,4,0,0,5,0,1,0};
+    const uint8_t *status = vp + 0x5201 * 2;
+    unsigned old_writes;
+
+    memset(vp + 0x5200 * 2, 0xA5, 6);
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    assert(status[0] == 0 && status[1] == 2);
+    sample[sizeof(sample) - 1] = 1;
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    assert(status[1] == 1);
+    V851ProtocolReceiveFrame(offline, sizeof(offline));
+    assert(status[1] == 0);
+    offline[11] = 1;
+    V851ProtocolReceiveFrame(offline, sizeof(offline));
+    assert(status[1] == 1);
+    V851ProtocolReceiveFrame(empty_ip, sizeof(empty_ip));
+    assert(status[1] == 0);
+
+    old_writes = writes;
+    V851ProtocolReceiveFrame(sample, sizeof(sample) - 1);
+    assert(writes == old_writes);
+    assert(status[-1] == 0xA5 && status[2] == 0xA5);
+}
+
+int main(int argc, char **argv)
+{
+    if(argc == 2 && strcmp(argv[1], "network") == 0)
+    {
+        test_network_status();
+        return 0;
+    }
     test_versions(); test_reset(); test_reset_crc_capacity(); test_key_to_wire_before_flash();
     test_handshake();
     puts("Production C firmware/reset/handshake behavior passed");

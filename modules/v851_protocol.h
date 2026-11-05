@@ -54,6 +54,9 @@
 #define V851_TLV_TAG_RESET_ACTION                0x01U
 #define V851_TLV_RESET_WIFI_AND_UNBIND           0x01U
 
+/* NetworkState. */
+#define V851_TLV_TAG_NETWORK_IPV4                0x04U
+#define V851_TLV_TAG_NETWORK_MQTT_CONNECTED      0x05U
 /* PowerState. */
 #define V851_TLV_TAG_POWER_MODE                  0x01U
 #define V851_TLV_TAG_BATTERY_PERCENT             0x02U
