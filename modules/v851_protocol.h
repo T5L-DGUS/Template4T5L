@@ -236,6 +236,9 @@ uint8_t V851TlvReadBinary64Uint16(const uint8_t *value,
 /* Returns NULL until a complete 0x37/0x6C result has been received. */
 const V851BootstrapResult *V851BootstrapResultGet(void);
 
+/* Clear connection indicators and invalidate the cached binding/QR result. */
+void V851TlvApplicationFactoryReset(void);
+
 /* Single project-level extension hook; Bootstrap is cached by its implementation. */
 void V851TlvApplicationSegment(uint8_t command,
                                const V851TlvSegment *segment);

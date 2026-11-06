@@ -536,11 +536,12 @@ void DeRun_Auto(void)
         addr_VP = *(uint16_t *)&upLoadF00[1];
         dataChangeLen = upLoadF00[3];
         *(uint16_t *)&buf[0] = addr_VP;
-        // read_dgus_vp(addr_VP, (uint8_t *)&buf[2], dataChangeLen);
-        // if (addr_VP == 0x5380)
-        // {
-        //     write_dgus_vp(0x5300, "\x04\01", 1);
-        // }
+        read_dgus_vp(addr_VP, (uint8_t *)&buf[2], dataChangeLen);
+        if (addr_VP == 0x4C0)
+        {
+            delay_ms(50);
+            write_dgus_vp(0xE8, "\x5A\x00\x00\03", 2);
+        }
 
         // UartSendData(&Uart2, buf, (dataChangeLen * 2) + 2);
         upLoadF00[0] = 0;

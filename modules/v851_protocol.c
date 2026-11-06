@@ -652,6 +652,7 @@ void V851ProtocolRequestFactoryReset(void)
         write_slot = (uint8_t)((write_slot + 1U) % V851_WIFI_TX_DEPTH);
     }
     V851WifiClearCredentials();
+    V851TlvApplicationFactoryReset();
     v851_factory_reset_pending = 1U;
 }
 

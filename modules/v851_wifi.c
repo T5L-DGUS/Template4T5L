@@ -190,6 +190,7 @@ void V851WifiClearCredentials(void)
                   V851_WIFI_SSID_MAX / 2U);
     /* Consume any connect key that has not reached the Wi-Fi task yet. */
     write_dgus_vp(V851_WIFI_KEY_ADDR, v851_wifi_clear_buffer, 1U);
+    write_dgus_vp(V851_WIFI_STATUS_ADDR, v851_wifi_clear_buffer, 1U);
 }
 
 void V851WifiInit(void)

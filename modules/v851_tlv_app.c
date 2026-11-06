@@ -178,6 +178,17 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
 #define V851_NETWORK_STATUS_VP                   0x5201U
 #define V851_MQTT_CONNECTED_VP                   0x5202U
 
+void V851TlvApplicationFactoryReset(void)
+{
+    uint8_t zero[2] = {0U, 0U};
+
+    write_dgus_vp(V851_NETWORK_STATUS_VP, zero, 1U);
+    write_dgus_vp(V851_MQTT_CONNECTED_VP, zero, 1U);
+    v851_bootstrap_result_valid = 0U;
+    memset(&v851_bootstrap_result, 0, sizeof(v851_bootstrap_result));
+    V851BootstrapWriteQr();
+}
+
 static uint8_t V851NetworkHasIpv4(const V851TlvField *field)
 {
     uint8_t index, digits, dots, nonzero;
