@@ -19,6 +19,10 @@
 #include "gpio.h"
 #endif /* gpioGPIO_ENABLE */
 
+/* 二维码（QR）：编码/绘制在 QR_Encode.c，页面刷新在 qr_page.c */
+#include "QR_Encode.h"
+#include "qr_page.h"
+
 void main(void)
 {
 
@@ -30,6 +34,8 @@ void main(void)
 	T5LCpuInit();
 	BootHandoffInit();
 	T5l_Stc_Init();
+
+	QR_ConfigInit();		//上电一次性读取并缓存二维码配置（NOR flash 配置区），此后页面切换不再读flash
 
 	#if v851PROTOCOL_ENABLED
 	V851ProtocolInit();
@@ -52,6 +58,9 @@ void main(void)
 
 	SysTaskAdd(7, T5LTOSTC_TASK_INTERVAL1, T5L_Stc_Poll);
 	SysTaskAdd(8, T5LTOSTC_TASK_INTERVAL2, Mult_Task);
+
+	SysTaskAdd(4, 10,  QR_PageFirstRun);	//二维码：10ms检测页面切换
+	SysTaskAdd(9, 500, QR_PageRefresh);		//二维码：500ms周期刷新内容
 
 	// SysTaskAdd(8, 1, key_scanf);
 

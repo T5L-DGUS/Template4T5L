@@ -376,6 +376,9 @@ void Dev_Aotu_Procese();
 void Flash_DataInit(void);
 void Flash_SaveData();
 void Start_Once_SaveData();
+/* NOR flash 读（t5l_stc.c 内实现）；供 QR_Encode.c 读取二维码配置区使用。
+   addr=字地址，len=字长度（len必须为偶数），buf 需容纳 len*2 字节 */
+void nor_flash_read(uint32_t addr, uint8_t* buf, uint16_t len);
 void T5l_Stc_UartRxProcess(uint16_t addr);
 void STC_ReporData_Procese(uint32_t addr);
 uint8_t check_passwd_format(uint8_t *u8buf );
