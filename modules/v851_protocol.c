@@ -514,8 +514,9 @@ void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len)
             return;
         }
         if((command == V851_TLV_CMD_PROPERTY) &&
-           (segment.struct_type >= V851_TLV_STRUCT_EXHAUST) &&
-           (segment.struct_type <= V851_TLV_STRUCT_FILTER) &&
+           (((segment.struct_type >= V851_TLV_STRUCT_EXHAUST) &&
+             (segment.struct_type <= V851_TLV_STRUCT_FILTER)) ||
+            (segment.struct_type == V851_TLV_STRUCT_INDICATOR_LEDS)) &&
            (V851ControlInfoValidateSegment(segment.struct_type,
                                            segment.payload,
                                            segment.length) == 0U))
@@ -538,8 +539,9 @@ void V851ProtocolReceiveFrame(const uint8_t *frame, uint16_t len)
                                     frame[offset + 2U]);
         segment.payload = &frame[offset + V851_TLV_SEGMENT_HEADER_SIZE];
         if((command == V851_TLV_CMD_PROPERTY) &&
-           (segment.struct_type >= V851_TLV_STRUCT_EXHAUST) &&
-           (segment.struct_type <= V851_TLV_STRUCT_FILTER))
+           (((segment.struct_type >= V851_TLV_STRUCT_EXHAUST) &&
+             (segment.struct_type <= V851_TLV_STRUCT_FILTER)) ||
+            (segment.struct_type == V851_TLV_STRUCT_INDICATOR_LEDS)))
         {
             (void)V851ControlInfoApplySegment(segment.struct_type,
                                                segment.payload,

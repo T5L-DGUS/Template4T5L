@@ -470,6 +470,17 @@ static uint8_t V851ControlInfoMapWritableField(uint8_t struct_type,
             }
             break;
 
+        case V851_TLV_STRUCT_INDICATOR_LEDS:
+            if((field->tag == V851_TLV_TAG_MIC_LED) ||
+               (field->tag == V851_TLV_TAG_CAMERA_LED))
+            {
+                if((field->length != 1U) || (field->value[0] > 1U)) return 0U;
+                *mapped_bit = (field->tag == V851_TLV_TAG_MIC_LED) ?
+                    V851_CONTROL_MAPPED_ENABLED : V851_CONTROL_MAPPED_SECONDARY;
+                *mapped_value = field->value[0];
+            }
+            break;
+
         case V851_TLV_STRUCT_FILTER:
             if(field->tag == V851_TLV_TAG_FILTER_LIFE_PERCENT)
             {
@@ -499,7 +510,8 @@ uint8_t V851ControlInfoValidateSegment(uint8_t struct_type,
     uint16_t mapped_value;
 
     if((field_bytes == NULL) ||
-       (V851ControlInfoIndex(struct_type) == 0xFFU))
+       ((V851ControlInfoIndex(struct_type) == 0xFFU) &&
+        (struct_type != V851_TLV_STRUCT_INDICATOR_LEDS)))
     {
         return 0U;
     }
@@ -609,6 +621,33 @@ uint8_t V851ControlInfoApplySegment(uint8_t struct_type,
     uint16_t secondary;
     uint16_t tertiary;
     uint32_t address;
+
+    if(struct_type == V851_TLV_STRUCT_INDICATOR_LEDS)
+    {
+        if(V851ControlInfoValidateSegment(struct_type, field_bytes, length) == 0U)
+        {
+            return 0U;
+        }
+        changed = 0U;
+        V851TlvFieldCursorInit(&cursor, field_bytes, length);
+        while(V851TlvFieldNext(&cursor, &field) == V851_TLV_ITER_FIELD)
+        {
+            /* Only explicitly supplied fields drive a switch; no defaults. */
+            if(field.tag == V851_TLV_TAG_MIC_LED)
+            {
+                Dev_Switch_Ctrl(&G_Device_Ctrl.MicLed.enable,
+                                MIC_LED_CMDWORD, field.value[0]);
+                changed = 1U;
+            }
+            else if(field.tag == V851_TLV_TAG_CAMERA_LED)
+            {
+                Dev_Switch_Ctrl(&G_Device_Ctrl.CameraLed.enable,
+                                CAMERA_LED_CMDWORD, field.value[0]);
+                changed = 1U;
+            }
+        }
+        return changed;
+    }
 
     index = V851ControlInfoIndex(struct_type);
     address = V851ControlInfoCommandAddress(struct_type);

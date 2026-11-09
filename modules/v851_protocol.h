@@ -51,8 +51,13 @@
 #define V851_TLV_STRUCT_BOOTSTRAP_RESULT         0x6CU
 #define V851_TLV_STRUCT_EVENT_ALARM              0x6DU
 #define V851_TLV_STRUCT_FACTORY_RESET            0x6EU
+#define V851_TLV_STRUCT_INDICATOR_LEDS           0x70U
 #define V851_TLV_TAG_RESET_ACTION                0x01U
 #define V851_TLV_RESET_WIFI_AND_UNBIND           0x01U
+
+/* IndicatorLeds: optional V851 -> T5L switch updates, 0 = off, 1 = on. */
+#define V851_TLV_TAG_MIC_LED                     0x01U
+#define V851_TLV_TAG_CAMERA_LED                  0x02U
 
 /* NetworkState. */
 #define V851_TLV_TAG_NETWORK_IPV4                0x04U

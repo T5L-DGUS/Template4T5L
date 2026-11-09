@@ -50,7 +50,10 @@ class ResetFirmwareTests(unittest.TestCase):
     def test_network_status(self):
         self.run_c_harness('network')
 
-    def run_c_harness(self, *args):
+    def test_indicator_leds(self):
+        self.run_c_harness(harness='v851_indicator_led_harness.c')
+
+    def run_c_harness(self, *args, harness='v851_reset_firmware_harness.c'):
         compiler = os.environ.get('HOST_CC') or shutil.which('clang') or shutil.which('gcc')
         local = Path('D:/youngwork/tools/llvm-mingw-20250709-ucrt-x86_64/bin/clang.exe')
         if not compiler and local.exists():
@@ -86,6 +89,8 @@ void UartSendData(UART_TYPE *, const uint8_t *, uint16_t);
             crc = core[core.index('uint16_t crc_16 ('):]
             (folder / 'crc_impl.h').write_text(crc[:crc.index('\n}') + 2], encoding='utf-8')
             stc = (ROOT / 'modules/t5l_stc.c').read_text(encoding='utf-8')
+            switch = stc[stc.index('void Dev_Switch_Ctrl('):]
+            (folder / 'switch_impl.h').write_text(switch[:switch.index('\n}') + 2], encoding='utf-8')
             header = (ROOT / 'modules/t5l_stc.h').read_text(encoding='utf-8')
             constants = '\n'.join(re.findall(r'^#define (?:DATALEN|MAIN_ADDR|BACK_ADDR|MAIN_DATA_ADDR|BACK_DATA_ADDR) .*$', header, re.M))
             service = stc.split('static uint8_t T5lStcServiceFactoryReset(void)', 1)[1].split('void T5L_Stc_Poll(void)', 1)[0]
@@ -108,7 +113,7 @@ static void TestResetKeyScan(void)
 ''', encoding='utf-8')
             executable = folder / ('test.exe' if os.name == 'nt' else 'test')
             command = [compiler, '-std=c99', '-Wno-unknown-pragmas', '-I', str(folder),
-                       '-I', str(ROOT / 'modules'), str(ROOT / 'tests/v851_reset_firmware_harness.c'),
+                       '-I', str(ROOT / 'modules'), str(ROOT / 'tests' / harness),
                        '-o', str(executable)]
             built = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
