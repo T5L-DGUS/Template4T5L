@@ -225,6 +225,13 @@ static void test_reset_crc_capacity(void)
 
 #include "v851_handshake_cases.h"
 
+static void assert_network_status(uint16_t wifi, uint16_t mqtt)
+{
+    uint16_t status[2];
+    memcpy(status, vp + 0x5201 * 2, sizeof(status));
+    assert(status[0] == wifi && status[1] == mqtt);
+}
+
 static void test_network_status(void)
 {
     uint8_t sample[] = {
@@ -234,27 +241,77 @@ static void test_network_status(void)
     };
     uint8_t offline[] = {0xAA,0x55,0,18,0x35,2,0,14,5,0,1,0,4,0,7,'0','.','0','.','0','.','0'};
     const uint8_t empty_ip[] = {0xAA,0x55,0,11,0x35,2,0,7,4,0,0,5,0,1,0};
-    const uint8_t *status = vp + 0x5201 * 2;
+    const uint8_t unrelated[] = {0xAA,0x55,0,4,0x35,0x07,0,0};
     unsigned old_writes;
 
-    memset(vp + 0x5200 * 2, 0xA5, 6);
+    memset(vp + 0x5200 * 2, 0xA5, 8);
+    InitAfterStartupHandshake();
+    assert_network_status(0, 0);
     V851ProtocolReceiveFrame(sample, sizeof(sample));
-    assert(status[0] == 0 && status[1] == 2);
+    assert_network_status(1, 0);
     sample[sizeof(sample) - 1] = 1;
     V851ProtocolReceiveFrame(sample, sizeof(sample));
-    assert(status[1] == 1);
+    assert_network_status(1, 1);
     V851ProtocolReceiveFrame(offline, sizeof(offline));
-    assert(status[1] == 0);
+    assert_network_status(0, 0);
     offline[11] = 1;
     V851ProtocolReceiveFrame(offline, sizeof(offline));
-    assert(status[1] == 1);
+    assert_network_status(0, 1);
     V851ProtocolReceiveFrame(empty_ip, sizeof(empty_ip));
-    assert(status[1] == 0);
+    assert_network_status(0, 0);
 
     old_writes = writes;
     V851ProtocolReceiveFrame(sample, sizeof(sample) - 1);
     assert(writes == old_writes);
-    assert(status[-1] == 0xA5 && status[2] == 0xA5);
+
+    /* A report at tick zero must arm the timeout too. */
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    mock_tick = 9999;
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    mock_tick = 10000;
+    V851ProtocolTask();
+    assert_network_status(0, 0);
+    old_writes = writes;
+    mock_tick = 20000;
+    V851ProtocolTask();
+    assert(writes == old_writes);
+
+    /* New reports restore the indicators and restart the full 10 seconds. */
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    assert_network_status(1, 1);
+    mock_tick = 29000;
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    mock_tick = 30000;
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    mock_tick = 38999;
+    V851ProtocolReceiveFrame(unrelated, sizeof(unrelated));
+    V851ProtocolReceiveFrame(sample, sizeof(sample) - 1);
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    mock_tick = 39000;
+    V851ProtocolTask();
+    assert_network_status(0, 0);
+
+    /* Unsigned elapsed time must work across the 32-bit tick rollover. */
+    mock_tick = 0xFFFFFF00U;
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    mock_tick += 9999U;
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    ++mock_tick;
+    V851ProtocolTask();
+    assert_network_status(0, 0);
+
+    V851ProtocolReceiveFrame(sample, sizeof(sample));
+    V851TlvApplicationFactoryReset();
+    assert_network_status(0, 0);
+    old_writes = writes;
+    mock_tick += 10000U;
+    V851ProtocolTask();
+    assert(writes == old_writes);
+    assert(vp[0x5200 * 2 + 1] == 0xA5 && vp[0x5203 * 2] == 0xA5);
 }
 
 int main(int argc, char **argv)

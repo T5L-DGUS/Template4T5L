@@ -22,6 +22,8 @@ void UartSendData(UART_TYPE *uart, const uint8_t *data, uint16_t length)
 { (void)uart; (void)data; (void)length; ++tx_count; }
 void V851WifiClearCredentials(void) {}
 void V851TlvApplicationFactoryReset(void) {}
+void V851NetworkStatusReset(void) {}
+void V851NetworkStatusTask(uint32_t tick) { (void)tick; }
 void V851TlvApplicationSegment(uint8_t command, const V851TlvSegment *segment)
 { (void)command; (void)segment; }
 uint8_t T5lStcSyncMappedControl(T5lStcMappedControl control, uint8_t mask,

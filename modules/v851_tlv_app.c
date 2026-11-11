@@ -2,6 +2,7 @@
 
 #if v851PROTOCOL_ENABLED
 
+#include "timer.h"
 #include <string.h>
 
 #define V851_BOOTSTRAP_QR_VP_ADDR                0x5500U
@@ -177,13 +178,33 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
 
 #define V851_NETWORK_STATUS_VP                   0x5201U
 #define V851_MQTT_CONNECTED_VP                   0x5202U
+#define V851_NETWORK_STATUS_TIMEOUT_MS           10000UL
 
-void V851TlvApplicationFactoryReset(void)
+static uint32_t v851_network_status_tick;
+static uint8_t v851_network_status_active;
+
+void V851NetworkStatusReset(void)
 {
     uint8_t zero[2] = {0U, 0U};
 
+    v851_network_status_active = 0U;
     write_dgus_vp(V851_NETWORK_STATUS_VP, zero, 1U);
     write_dgus_vp(V851_MQTT_CONNECTED_VP, zero, 1U);
+}
+
+void V851NetworkStatusTask(uint32_t tick)
+{
+    if((v851_network_status_active != 0U) &&
+       ((uint32_t)(tick - v851_network_status_tick) >=
+        V851_NETWORK_STATUS_TIMEOUT_MS))
+    {
+        V851NetworkStatusReset();
+    }
+}
+
+void V851TlvApplicationFactoryReset(void)
+{
+    V851NetworkStatusReset();
     v851_bootstrap_result_valid = 0U;
     memset(&v851_bootstrap_result, 0, sizeof(v851_bootstrap_result));
     V851BootstrapWriteQr();
@@ -254,7 +275,9 @@ static void V851NetworkApplySegment(const V851TlvSegment *segment)
     {
         status[0] = has_ip ? 1U : 0U;
         status[1] = mqtt_connected ? 1U : 0U;
-        write_dgus_vp(V851_NETWORK_STATUS_VP, status, 2U);
+        write_dgus_vp(V851_NETWORK_STATUS_VP, (uint8_t *)status, 2U);
+        v851_network_status_tick = GetSysTick();
+        v851_network_status_active = 1U;
     }
 }
 

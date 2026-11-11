@@ -536,12 +536,12 @@ void DeRun_Auto(void)
         addr_VP = *(uint16_t *)&upLoadF00[1];
         dataChangeLen = upLoadF00[3];
         *(uint16_t *)&buf[0] = addr_VP;
-        read_dgus_vp(addr_VP, (uint8_t *)&buf[2], dataChangeLen);
-        if (addr_VP == 0x4C0)
-        {
-            delay_ms(50);
-            write_dgus_vp(0xE8, "\x5A\x00\x00\03", 2);
-        }
+        // read_dgus_vp(addr_VP, (uint8_t *)&buf[2], dataChangeLen);
+        // if (addr_VP == 0x4C0)
+        // {
+        //     delay_ms(50);
+        //     write_dgus_vp(0xE8, "\x5A\x00\x00\03", 2);
+        // }
 
         // UartSendData(&Uart2, buf, (dataChangeLen * 2) + 2);
         upLoadF00[0] = 0;
@@ -1385,14 +1385,15 @@ void Close_All_Dev(){
 
 void UVC_On()
 {
-    
     memcpy(&G_Back_Device_Ctrl, &G_Device_Ctrl, sizeof(DeviceCtrl));
     Close_All_Dev();
 
-    
     G_Device_Ctrl.UVC.enable = 0;
     Send_Cmd_Ctrl(UVC_CMDWORD, 1);
 }
+
+
+
 void UVC_Off()
 {
     G_Device_Ctrl.UVC.enable = 1;
@@ -3192,7 +3193,7 @@ void Flash_DataInit(void)
         memcpy(&databuf[16], &G_Device_Ctrl.Cfg.passwd[0], 4);
 
         //语言
-        databuf[18] = G_Device_Ctrl.Cfg.language = 1;
+        databuf[18] = 1;
        
         Language_Init(databuf[18]);
 

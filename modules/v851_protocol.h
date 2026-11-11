@@ -244,6 +244,10 @@ const V851BootstrapResult *V851BootstrapResultGet(void);
 /* Clear connection indicators and invalidate the cached binding/QR result. */
 void V851TlvApplicationFactoryReset(void);
 
+/* Clear Wi-Fi/MQTT indicators on startup, reset, or a 10-second RX timeout. */
+void V851NetworkStatusReset(void);
+void V851NetworkStatusTask(uint32_t tick);
+
 /* Single project-level extension hook; Bootstrap is cached by its implementation. */
 void V851TlvApplicationSegment(uint8_t command,
                                const V851TlvSegment *segment);

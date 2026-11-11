@@ -1004,12 +1004,15 @@ void V851ProtocolInit(void)
     v851_alarm_scan_tick = tick;
     v851_startup_pending = 1U;
     v851_peer_boot_received = 0U;
+    V851NetworkStatusReset();
 }
 
 void V851ProtocolTask(void)
 {
     uint32_t tick;
 
+    tick = GetSysTick();
+    V851NetworkStatusTask(tick);
     /* Leave one task turn idle after the final byte before local flash work. */
     if(v851_factory_reset_draining != 0U)
     {
@@ -1019,7 +1022,6 @@ void V851ProtocolTask(void)
         }
         return;
     }
-    tick = GetSysTick();
     if((V851ProtocolServiceFactoryReset() == 0U) &&
        (V851ProtocolServiceAlarm(tick) == 0U))
     {
