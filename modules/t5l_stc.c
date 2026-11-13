@@ -2116,7 +2116,7 @@ void key_scanf(void)
             write_dgus_vp(UVC_VP + 1, (uint8_t *)&G_Device_Ctrl.UVC.running_time_h, 1);
             break;
         case 0x1301: //紫外消杀-中断
-            if(G_Device_Ctrl.UVC.lock_enable==0){
+            if(G_Device_Ctrl.UVC.lock_enable==1){
                     write_dgus_vp(0xE8,"\x5A\x01\x00\x2D",2);//弹窗断锁
                     G_Device_Ctrl.UVC.remind_flag=2;
                 }
@@ -2773,26 +2773,28 @@ void STC_ReporData_Procese(uint32_t addr)
     if (u16buf[2] == 0)
     {
         //正常
-        G_Device_Ctrl.environment.temperaturex10 = (int16_t)(u16buf[0]);
-        G_Device_Ctrl.environment.temperature = (int16_t)(u16buf[0] / 10);
         G_Device_Ctrl.environment.humidity = u16buf[1];
         G_Device_Ctrl.environment.GXHTC3_err_sta = 0;
-        // G_Device_Ctrl.environment.NTC_err_sta = 0;
     }
     else
     {
         //湿度传感器异常
         G_Device_Ctrl.environment.GXHTC3_err_sta = 1;
 
-        //判断NTC传感器
-        if (u16buf[0x1E] == 0)
-        {
-            G_Device_Ctrl.environment.temperaturex10 = (int16_t)(u16buf[3]);
-            G_Device_Ctrl.environment.temperature = (int16_t)(u16buf[3] / 10);
-            G_Device_Ctrl.environment.NTC_err_sta = 0;
-        }
-        else
-        {
+    }
+    //判断NTC传感器
+    if (u16buf[0x1E] == 0)
+    {
+        G_Device_Ctrl.environment.temperaturex10 = (int16_t)(u16buf[3]);
+        G_Device_Ctrl.environment.temperature = (int16_t)(u16buf[3] / 10);
+        G_Device_Ctrl.environment.NTC_err_sta = 0;
+    }
+    else
+    {
+        if(G_Device_Ctrl.environment.GXHTC3_err_sta ==0){
+            G_Device_Ctrl.environment.temperaturex10 = (int16_t)(u16buf[0]);
+            G_Device_Ctrl.environment.temperature = (int16_t)(u16buf[0] / 10);
+        }else{
             //温度传感器都异常
             G_Device_Ctrl.environment.temperature=0;
             G_Device_Ctrl.environment.NTC_err_sta = 1;
@@ -2867,7 +2869,7 @@ void STC_ReporData_Procese(uint32_t addr)
     write_dgus_vp(0x5311, (uint8_t *)&tmp, 1);
 
     //排风扇_故障码
-    if (u16buf[6] != 0)
+    if (u16buf[6] == 1)
     {
         
         G_Device_Ctrl.Exhaust.err_sta = 1;
@@ -2876,7 +2878,7 @@ void STC_ReporData_Procese(uint32_t addr)
             Exhaust_Off(0);
         }
     }
-    else
+    else if(u16buf[6] == 0)
     {
 
         G_Device_Ctrl.Exhaust.err_sta = 0;
@@ -2916,8 +2918,11 @@ void STC_ReporData_Procese(uint32_t addr)
     }else{
         //禁止打开紫外
         G_Device_Ctrl.UVC.lock_enable=0;
+
+
         if(G_Device_Ctrl.UVC.enable==1){
             UVC_Off();
+            
         }
         if(G_Device_Ctrl.UVC.remind_flag==2){
             UVC_Off();
@@ -3571,9 +3576,20 @@ void Set_Temperature_Unit(uint16_t Unit)
 
 void Mult_Task()
 {
+    uint8_t frame[10];
     AlarmCode_Updata();
     Updata_Vpdata_To_Report();
     PageFunction();
+ //   AA BB 15 01 00 00 55 E8
+    frame[0] = 0xaa;
+    frame[1] = 0xbb;
+    frame[2] = 0x15;
+    frame[3] = 0x01;
+    frame[4] = 0x00;
+    frame[5] = 0x00;
+    frame[6] = 0x55;
+    frame[7] = 0xE8;
+    UartSendData(&Uart2,frame,8);
 }
 
 
