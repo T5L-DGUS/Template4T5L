@@ -7,6 +7,9 @@
 #include "modbus.h" 
 #endif /* uartMODBUS_PROTOCOL_ENABLED */
 
+#if OTA_ENABLED
+#include "ota.h"
+#endif
 
 #include "rtc.h"
 
@@ -50,6 +53,11 @@ void main(void)
   SysTaskAdd(2, UART_TASK_INTERVAL, UartProtocalHandleTask);
 
 
+  #if OTA_ENABLED
+  OTAInit();
+  SysTaskAdd(4, OTA_TASK_INTERVAL, OTATask);
+  #endif /* OTA_ENABLED */
+
   #if sysBEAUTY_MODE_ENABLED
   SysTaskAdd(3, R11_TASK_INTERVAL, R11NetskinAnalyzeTask);
   #endif /* sysBEAUTY_MODE_ENABLED */
@@ -61,6 +69,8 @@ void main(void)
   #if sysADVERTISE_MODE_ENABLED
   SysTaskAdd(3, R11_TASK_INTERVAL, R11AdvertiseTask);
   #endif /* sysADVERTISE_MODE_ENABLED */
+
+  
 
   while(1)
   {

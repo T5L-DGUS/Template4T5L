@@ -476,6 +476,16 @@
               <FileType>5</FileType>
               <FilePath>..\source\TA_protocal.h</FilePath>
             </File>
+            <File>
+              <FileName>ota.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\source\ota.c</FilePath>
+            </File>
+            <File>
+              <FileName>ota.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\source\ota.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
