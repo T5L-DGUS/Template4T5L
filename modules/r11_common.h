@@ -118,13 +118,16 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define cmdMP4_UPDATEFILE         	0x61
 #define cmdMP4_PREVFILE           	0x63
 #define cmdMP4_NEXTFILE           	0x62
-#define cmdMP4_PLAY                	0x64
+#define cmdMP4_PLAY                	0x66
 #define cmdMP4_PAUSE               	0x65
-#define cmdMP4_REPLAY              	0x66
+#define cmdMP4_REPLAY              	0x75
+#define cmdMP4_SWITCH                0x76
+#define cmdMP4_STATE                 0x64
 #define cmdMP4_STOP					0x67
+#define cmdMP4_STOP_ACK              0x68
 #define cmdMP4_AUX_SET              0x6b
 #define cmdMP4_PLAY_BY_NUM          0x74
-#define cmdMP4_IMG_SET              0x76    /* 0x76为小图播放，0x77为大图播放*/
+#define MP4_STATE_PLAYING            0x01
 #define cmdMP4_ROTATE_ANGLE         0x79
 #define cmdCHECK_STATUS_NET         0x85
 #define cmdCHECK_STATUS_DEVICE      0x88
@@ -194,9 +197,10 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define R11_RECV_FAIL              0x00
 
 
-#define DirPath(Index) ((Index==1)?("url:/mnt/SDCARD/VIDEO/"):\
-					   ((Index==2)?("url:/mnt/exUDISK/VIDEO/"):\
-                       ((Index==3)?("url:/mnt/UDISK/VIDEO/"):("url:/mnt/exUDISK/VIDEO/"))))
+
+#define DirPath(Index) ((Index==1)?("/mnt/SDCARD/VIDEO/"):\
+					   ((Index==2)?("/mnt/exUDISK/VIDEO/"):\
+                       ((Index==3)?("/mnt/UDISK/VIDEO/"):("/mnt/exUDISK/VIDEO/"))))
 
 /**
  * @struct PLAYER_T
@@ -267,7 +271,8 @@ void FormatArrayToFullPath(uint8_t *buf, uint8_t len);
  * @param y_point Y坐标
  * @param high    高度
  * @param weight  宽度
- * @param big_small_flag 0x00:小图模式，并进行一次刷新 0x01：大图模式，并进行一次刷新 0x02：只更新显示位置，不发送给r11，适用于美容屏
+ * @param big_small_flag 0x00:小图模式 0x01:全屏模式 0x02:只更新本地显示位置。
+ * @note 水机协议在播放/切换/停止指令中携带尺寸，不再发送旧版0x76/0x77尺寸指令。
  */
 void R11ChangePictureLocate(uint16_t x_point, uint16_t y_point, uint16_t high, uint16_t weight, uint8_t big_small_flag);
 

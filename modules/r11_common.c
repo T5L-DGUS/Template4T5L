@@ -107,22 +107,60 @@ void T5lJpegInit(void)
 
 void R11ChangePictureLocate(uint16_t x_point,uint16_t y_point,uint16_t high,uint16_t weight,uint8_t big_small_flag)
 {
-    uint8_t write_param[4];
     Icon_Overlay_SP_X[0] = Icon_Overlay_SP_X[1] = x_point;
     Icon_Overlay_SP_Y[0] = Icon_Overlay_SP_Y[1] = y_point;
     Icon_Overlay_SP_L[0] = Icon_Overlay_SP_L[1] = high;
     Icon_Overlay_SP_H[0] = Icon_Overlay_SP_H[1] = weight;
     if(big_small_flag == 0x00 || big_small_flag == 0x01)
     {
-        write_param[0] = Icon_Overlay_SP_L[0] >> 8;
-        write_param[1] = Icon_Overlay_SP_L[0];
-        write_param[2] = Icon_Overlay_SP_H[0] >> 8;
-        write_param[3] = Icon_Overlay_SP_H[0];
-        T5lSendUartDataToR11(cmdMP4_IMG_SET+big_small_flag, write_param);
+        Big_Small_Flag = big_small_flag;
     }else
     {
         __NOP();
     }
+}
+
+
+/* 水机协议显示参数：位置0、发送给T5L显示，尺寸随当前全屏状态及屏幕方向选择。 */
+static void R11FillVideoDisplayParams(uint8_t *buf)
+{
+    uint16_t width, height;
+    uint8_t rotate_param[2], ratio;
+
+    /* 历史配置名称与实际轴向相反：0x0586/video_high为横向宽度，0x0587为高度。 */
+    width = mainview.video_high;
+    height = mainview.video_weight;
+    if(Big_Small_Flag == 0x01)
+    {
+        ratio = screen_opt.screen_ratio;
+        if(ratio >= 5)
+        {
+            ratio = 0;
+        }
+        #if sysBEAUTY_MODE_ENABLED
+        width = pixels_arr_h[ratio];
+        height = pixels_arr_l[ratio];
+        #else
+        width = pixels_arr_h2[ratio];
+        height = pixels_arr_l2[ratio];
+        #endif
+        read_dgus_vp(sysDGUS_SYSTEM_CONFIG, rotate_param, 1);
+        if((rotate_param[1] & 0x01) != 0)
+        {
+            width = height;
+            #if sysBEAUTY_MODE_ENABLED
+            height = pixels_arr_h[ratio];
+            #else
+            height = pixels_arr_h2[ratio];
+            #endif
+        }
+    }
+    buf[0] = 0x00;
+    buf[1] = 0x01;
+    buf[2] = (uint8_t)(width >> 8);
+    buf[3] = (uint8_t)width;
+    buf[4] = (uint8_t)(height >> 8);
+    buf[5] = (uint8_t)height;
 }
 
 
@@ -153,9 +191,9 @@ void FormatArrayToFullPath(uint8_t *buf, uint8_t len)
 void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
 {
     #define BUF_MAX_LEN  256
-    uint8_t 	i,len,now_len,Temp_Buf_uint8_t[10];
+    uint8_t     i, dir_len, append_crc = 1;
     uint8_t     r11_buf[BUF_MAX_LEN];
-    uint16_t    CRC16;
+    uint16_t    CRC16, len, path_len;
     r11_buf[0] = 0xAA;
     r11_buf[1] = 0x55;
     r11_buf[4] = cmd;
@@ -179,6 +217,7 @@ void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
             r11_buf[6] = buf[1];
             break;
         case cmdMP4_AUX_SET:
+            append_crc = 0;
             r11_buf[2] = 0x00;
             r11_buf[3] = 0x02;
             r11_buf[5] = buf[0];
@@ -192,52 +231,51 @@ void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
             break;
         case cmdMP4_PREVFILE:
         case cmdMP4_NEXTFILE: 
-        case cmdMP4_PAUSE: 
-        case cmdMP4_REPLAY: 
-        case cmdMP4_STOP: 
             r11_buf[2] = 0x00;
             r11_buf[3] = 0x02;
             r11_buf[5] = 0x00;
             break;
-        case cmdMP4_PLAY: 
-            len = mp4_name_len[r11_player.serial];
+        case cmdMP4_PAUSE:
+        case cmdMP4_REPLAY:
+            append_crc = 0;
             r11_buf[2] = 0x00;
             r11_buf[3] = 0x01;
-            if (len > MAX_MP3_NAME_LEN)
+            break;
+        case cmdMP4_STOP:
+            append_crc = 0;
+            r11_buf[2] = 0x00;
+            r11_buf[3] = 0x07;
+            R11FillVideoDisplayParams(&r11_buf[5]);
+            break;
+        case cmdMP4_PLAY:
+        case cmdMP4_SWITCH:
+            if(r11_player.serial >= 5 || buf == NULL)
             {
                 return;
             }
-            now_len = 5;
-
-            switch (r11_player.store_type)
+            len = mp4_name_len[r11_player.serial];
+            if(len == 0 || len > MAX_MP3_NAME_LEN)
             {
-                case 1:
-                case 2:
-                case 3:
-                    Temp_Buf_uint8_t[0] = strlen ( DirPath ( r11_player.store_type ) );
-                    memcpy ( &r11_buf[5], DirPath ( r11_player.store_type ), Temp_Buf_uint8_t[0] );
-                    now_len += Temp_Buf_uint8_t[0];
-                    break;
-                default:
-                    r11_player.store_type = exUDISK;
-                    Temp_Buf_uint8_t[0] = strlen ( DirPath ( r11_player.store_type ) ) ;
-                    memcpy ( &r11_buf[5], DirPath ( r11_player.store_type ), Temp_Buf_uint8_t[0] );
-                    now_len += Temp_Buf_uint8_t[0];
-                    break;
+                return;
             }
-            memcpy ( &r11_buf[now_len], buf, len );
-            len += now_len;
-            r11_buf[len++] = 0x00;
-            r11_buf[3] += len - 5;
-            break;
-        case cmdMP4_IMG_SET: 
-        case (cmdMP4_IMG_SET+1): 
+            if(cmd == cmdMP4_PLAY && r11_player.state == MP4_STATE_PLAYING)
+            {
+                r11_buf[4] = cmdMP4_SWITCH;
+            }
+            if(r11_player.store_type < SDCARD || r11_player.store_type > UDISK)
+            {
+                r11_player.store_type = exUDISK;
+            }
+            dir_len = strlen(DirPath(r11_player.store_type));
+            path_len = dir_len + len;
+            append_crc = 0;
             r11_buf[2] = 0x00;
-            r11_buf[3] = 0x05;
-            r11_buf[5] = buf[0];
-            r11_buf[6] = buf[1];
-            r11_buf[7] = buf[2];
-            r11_buf[8] = buf[3];
+            r11_buf[3] = (uint8_t)(9 + path_len);
+            R11FillVideoDisplayParams(&r11_buf[5]);
+            r11_buf[11] = (uint8_t)(path_len >> 8);
+            r11_buf[12] = (uint8_t)path_len;
+            memcpy(&r11_buf[13], DirPath(r11_player.store_type), dir_len);
+            memcpy(&r11_buf[13 + dir_len], buf, len);
             break;
         case cmdCHECK_STATUS_NET:
         case cmdCHECK_STATUS_DEVICE: 
@@ -285,11 +323,16 @@ void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
             return;
             break;
     }
-    CRC16 = crc_16 ( &r11_buf[4], r11_buf[3] );
-    r11_buf[r11_buf[3]+4] = CRC16 >> 8;
-    r11_buf[r11_buf[3]+5] = CRC16 & 0xFF;
-    r11_buf[3] += 2;
+    /* 桌面水机协议的播放控制帧没有CRC及路径结尾0；其他旧指令保留原格式。 */
+    if(append_crc != 0)
+    {
+        CRC16 = crc_16 ( &r11_buf[4], r11_buf[3] );
+        r11_buf[r11_buf[3]+4] = CRC16 >> 8;
+        r11_buf[r11_buf[3]+5] = CRC16 & 0xFF;
+        r11_buf[3] += 2;
+    }
     UartSendData ( &Uart_R11, r11_buf, r11_buf[3]+4 );
+    UartSendData ( &Uart2, r11_buf, r11_buf[3]+4 );
     return;
 }
 
@@ -411,9 +454,11 @@ void R11VideoPlayerProcess(void)
         r11_player.now_play_page = 1;
         r11_player.now_play_serial = 0;
         r11_player.total_serial = 0;
+        r11_player.state = 0;
         /** 0.读取音量和循环信息 */
         FlashToDgus(flashMAIN_BLOCK_ORDER, VOLUME_SET_ADDR, VOLUME_SET_ADDR,0x06);
         read_dgus_vp(VOLUME_SET_ADDR, (uint8_t *)&read_param[0], 6);
+        Big_Small_Flag = (read_param[5] == 0x0001) ? 0x01 : 0x00;
         video_init_process = VIDEO_PROCESS_VOLUME;
     }else if(video_init_process == VIDEO_PROCESS_VOLUME)
     {
@@ -1120,36 +1165,42 @@ static void ExtractFilenamesFromProtocol(uint8_t *frame, uint16_t len)
 void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
     uint16_t write_param[10];
+    if(len < 6)
+    {
+        return;
+    }
     if(frame[0] == 0xAA && frame[1] == 0x55)
     {
-        if(len < 6 || len < ((frame[2]<<8|frame[3])+4))
+        if((len - 4) != (((uint16_t)frame[2] << 8) | frame[3]))
         {
             return;
         }
-        /** @note 广告屏含有crc校验 */
-        #if sysADVERTISE_MODE_ENABLED
-        if((frame[len-1]<<8 |frame[len-2]) != crc_16(&frame[4], len-6))
-        {
-            return;
-        }else{
-            len -= 2;
-        }
-        #endif /* sysADVERTISE_MODE_ENABLED */
         switch (frame[4])
         {
         case cmdMP4_UPDATEFILE:
         case cmdMP4_PREVFILE:
         case cmdMP4_NEXTFILE:
-            /* 提取以0x23 0x23(##)为分隔符的文件名 */            
+            /* 提取以0x23 0x23(##)为分隔符的文件名 */
             ExtractFilenamesFromProtocol(frame, len);
             break;
-        case cmdMP4_PAUSE:
-            r11_player.state = 0x05;
-        case cmdMP4_REPLAY:
-            r11_player.state = 0x01;
-        case cmdMP4_STOP:
-            r11_player.state = 0x04;
-        case cmdMP4_PLAY:     /* 播放状态反馈*/
+        case cmdMP4_PLAY:
+        case cmdMP4_SWITCH:
+        case cmdMP4_STOP_ACK:
+            /* 0x66/0x76/0x68：成功标志在[5]，位置在[6]，当前状态在[12]。 */
+            if(len != 13 || frame[6] != 0x00)
+            {
+                return;
+            }
+            r11_player.state = frame[12];
+            write_param[0] = (uint16_t)r11_player.state;
+            write_dgus_vp(PLAY_STATUS_ADDR, (uint8_t*)&write_param[0], 1);
+            break;
+        case cmdMP4_STATE:
+            /* 暂停/恢复使用0x64反馈当前状态。 */
+            if(len != 6)
+            {
+                return;
+            }
             r11_player.state = frame[5];
             write_param[0] = (uint16_t)r11_player.state;
             write_dgus_vp(PLAY_STATUS_ADDR, (uint8_t*)&write_param[0], 1);

@@ -18,16 +18,19 @@ void R11ConfigInitFormLib(void)
     	/** 1.进行分辨率的初始化，针对2k分辨率需要修改主频 */
 	read_dgus_vp(PIXELS_SET_ADDR,(uint8_t*)&read_param[0],1);
 	memcpy(&screen_opt, &read_param[0], 2);
-	if(screen_opt.screen_ratio == 0)  //19201080
-	{
-		sys_2k_ratio = 1;
+	sys_2k_ratio = 1;
 		sysFOSC = 383385600;
 		sysFCLK = 383385600;
-	}else{
-		sys_2k_ratio = 0;
-		sysFOSC = 206438400;
-		sysFCLK = 206438400;
-	}
+	// if(screen_opt.screen_ratio == 0)  //19201080
+	// {
+	// 	sys_2k_ratio = 1;
+	// 	sysFOSC = 383385600;
+	// 	sysFCLK = 383385600;
+	// }else{
+	// 	sys_2k_ratio = 0;
+	// 	sysFOSC = 206438400;
+	// 	sysFCLK = 206438400;
+	// }
 	/** 2.进行屏幕设置的初始化，包括分频系数，显示质量，截图张数 */
     Icon_Overlay_SP_VP[0] = Icon_Overlay_SP_VP[2] = 0x10000;
 	Icon_Overlay_SP_VP[1] = Icon_Overlay_SP_VP[3] = 0x28000;
@@ -106,6 +109,7 @@ static void R11StartPowerInit(void)
 	r11_send_buf[6]=(uint8_t)fclk_div;
 	r11_send_buf[7]=Bit8_16_Flag*8;
 	UartSendData(&Uart_R11,r11_send_buf,8);
+	UartSendData(&Uart2,r11_send_buf,8);
 }
 
 
@@ -175,12 +179,12 @@ void UartR11UserAdvertiseProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             return;
         }
 
-        if((frame[len-1]<<8 |frame[len-2]) != crc_16(&frame[4], len-6))
-        {
-            return;
-        }else{
-            len -= 2;
-        }
+        // if((frame[len-1]<<8 |frame[len-2]) != crc_16(&frame[4], len-6))
+        // {
+        //     return;
+        // }else{
+        //     len -= 2;
+        // }
 		
         if(frame[5] == 0x04 && frame[6] == 0x82)
         {
