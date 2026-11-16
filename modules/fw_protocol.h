@@ -66,6 +66,10 @@
 #define FW_UI_SLEEP_HOT      0x38E4
 #define FW_UI_POPUP_TIME_TEXT 0x38E5
 #define FW_UI_POPUP_ACK      0x040A
+/* R11 internal Flash capacity: unsigned MB * 100, separate from FW registers. */
+#define FW_UI_FLASH_CAPACITY 0x38EA
+#define FW_UI_FLASH_STATE    0x38EB /* 0 idle, 1 querying, 2 valid, 3 failed, 4 timeout */
+#define FW_UI_FLASH_TEXT     0x38F0 /* GBK/ASCII, 8 bytes */
 #define USB_VIDEO_VP       0x3780
 #define USB_SOFTWARE_VP    0x3781
 #define USB_COMPLETE_VP    0x3782

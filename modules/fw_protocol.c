@@ -44,6 +44,8 @@ static uint8_t xdata popup_active, popup_pending, popup_seen, popup_alarm_last;
 static uint8_t xdata run_completed, run_requested;
 static uint32_t xdata run_requested_at;
 static uint16_t xdata warning_ack41, warning_ack42;
+static uint8_t xdata flash_pending;
+static uint32_t xdata flash_query_at;
 static void LocalDraft(void);
 static void LocalCommit(void);
 static void LocalTask(uint32_t now);
@@ -1071,8 +1073,23 @@ void FwProtocolFeed(uint8_t *bytes, uint16_t length)
 void FwUsbProtocol(UART_TYPE *uart, uint8_t *frame, uint16_t length)
 {
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
-    if(uart != &Uart_R11 || length != 6 || frame[0] != 0xAA || frame[1] != 0x55 ||
-       frame[2] != 0 || frame[3] != 2 || frame[4] != 0xFB) return;
+    uint16_t crc, capacity;
+    if(uart != &Uart_R11 || length < 6 || frame[0] != 0xAA || frame[1] != 0x55 || frame[2] != 0) return;
+    /* F5 includes CRC in the length field; both capacity and CRC are high-byte first.
+     * The shared UART dispatcher already preserves split/concatenated AA55 frames. */
+    if(frame[4]==0xF5) {
+        if(!flash_pending || length!=10 || frame[3]!=6 || frame[5]>1) return;
+        crc=crc_16(&frame[4],4);
+        if(frame[8]!=(uint8_t)(crc>>8) || frame[9]!=(uint8_t)crc) return;
+        flash_pending=0;
+        capacity=frame[5]?((uint16_t)frame[6]<<8)|frame[7]:0;
+        FwSet(FW_UI_FLASH_CAPACITY,capacity);
+        FwSet(FW_UI_FLASH_STATE,frame[5]?2:3);
+        if(frame[5]) UiNumber(FW_UI_FLASH_TEXT,capacity,2,0,1,4);
+        else UiText(FW_UI_FLASH_TEXT,"\xB2\xE9\xD1\xAF\xCA\xA7\xB0\xDC",4); /* query failed */
+        return;
+    }
+    if(length!=6 || frame[3]!=2 || frame[4]!=0xFB) return;
     switch(frame[5]) {
         case 0:
             video_ready = software_ready = 0;
@@ -1105,6 +1122,9 @@ void FwProtocolInit(void)
     refresh_active = 0;
     refresh_pending = 1;
     last_page = ReadPageId();
+    flash_pending=0; flash_query_at=0;
+    FwSet(FW_UI_FLASH_CAPACITY,0); FwSet(FW_UI_FLASH_STATE,0);
+    UiText(FW_UI_FLASH_TEXT,"--",4);
     ui_result_page=last_page;
     sent_at = last_rx = FwNow();
     FwInvalidateMirror();
@@ -1471,7 +1491,11 @@ void FwProtocolTask(void)
     uint8_t alarm_reg,alarm_bit,alarm_key;
     uint32_t now = FwNow();
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
-    uint8_t fb[6] = {0xAA, 0x55, 0, 2, 0xFB, 1};
+    uint8_t fb[8] = {0xAA, 0x55, 0, 2, 0xFB, 1, 0, 0};
+    if(flash_pending && now-flash_query_at>=3000UL) {
+        flash_pending=0; FwSet(FW_UI_FLASH_STATE,4);
+        UiText(FW_UI_FLASH_TEXT,"\xB2\xE9\xD1\xAF\xB3\xAC\xCA\xB1",4); /* query timeout */
+    }
     trigger = FwGet(USB_VIDEO_GO_VP);
     if(trigger) {
         FwSet(USB_VIDEO_GO_VP, 0);
@@ -1499,6 +1523,17 @@ void FwProtocolTask(void)
 #endif
     page = UiLogicalPage();
     if(page != last_page) {
+#if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
+        flash_pending=0;
+        if(UiAdvanced(page)) {
+            flash_pending=1; flash_query_at=now;
+            FwSet(FW_UI_FLASH_CAPACITY,0); FwSet(FW_UI_FLASH_STATE,1);
+            UiText(FW_UI_FLASH_TEXT,"\xB2\xE9\xD1\xAF\xD6\xD0",4); /* querying */
+            fb[3]=4; fb[4]=0xF5; fb[5]=1;
+            value=crc_16(&fb[4],2); fb[6]=(uint8_t)(value>>8); fb[7]=(uint8_t)value;
+            UartSendData(&Uart_R11,fb,8);
+        }
+#endif
         /* Local overlays/player do not trigger extra business reads. */
         if(!offline && UiSettingsPage(page)) refresh_pending = 1;
         editing=UiSettingsPage(page) || page==FW_UI_CLOCK_PAGE || (page==FW_UI_PASS_PAGE && pass_mode>=2);
