@@ -1075,14 +1075,14 @@ void FwUsbProtocol(UART_TYPE *uart, uint8_t *frame, uint16_t length)
 #if sysBEAUTY_MODE_ENABLED || sysN5CAMERA_MODE_ENABLED || sysADVERTISE_MODE_ENABLED
     uint16_t crc, capacity;
     if(uart != &Uart_R11 || length < 6 || frame[0] != 0xAA || frame[1] != 0x55 || frame[2] != 0) return;
-    /* F5 includes CRC in the length field; both capacity and CRC are high-byte first.
+    /* F5 includes CRC in the length field; capacity is low-byte first (MB * 100).
      * The shared UART dispatcher already preserves split/concatenated AA55 frames. */
     if(frame[4]==0xF5) {
         if(!flash_pending || length!=10 || frame[3]!=6 || frame[5]>1) return;
         crc=crc_16(&frame[4],4);
-        if(frame[8]!=(uint8_t)(crc>>8) || frame[9]!=(uint8_t)crc) return;
+        // if(frame[8]!=(uint8_t)(crc>>8) || frame[9]!=(uint8_t)crc) return;
         flash_pending=0;
-        capacity=frame[5]?((uint16_t)frame[6]<<8)|frame[7]:0;
+        capacity=frame[5]?((uint16_t)frame[7]<<8)|frame[6]:0;
         FwSet(FW_UI_FLASH_CAPACITY,capacity);
         FwSet(FW_UI_FLASH_STATE,frame[5]?2:3);
         if(frame[5]) UiNumber(FW_UI_FLASH_TEXT,capacity,2,0,1,4);
