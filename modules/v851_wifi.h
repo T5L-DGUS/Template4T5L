@@ -14,6 +14,14 @@
 #define V851_WIFI_LIST_CONFIG_ADDR               0x05BEUL
 #define V851_WIFI_STATUS_ADDR                    0x06D8UL
 
+/* 连接中动画图标：写 1 启动动画，写 0 结束动画 */
+#define V851_WIFI_CONNECT_ANIM_VP                0x5134UL
+/* 点击"连接"后动画固定显示时长（ms），到点自动关闭 */
+#define V851_WIFI_CONNECT_ANIM_MS                25000UL
+/* 连接动画显示页 / 动画结束后返回的扫描页 */
+#define V851_WIFI_PAGE_SCAN                      41U
+#define V851_WIFI_PAGE_CONNECT_ANIM              51U
+
 #define V851_WIFI_CMD_SCAN                       0xC0U
 #define V851_WIFI_CMD_CONNECT                    0xC1U
 #define V851_WIFI_CMD_STATUS                     0xC5U

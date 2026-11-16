@@ -194,6 +194,17 @@ void write_dgus_vp(uint32_t addr, uint8_t *buf, uint16_t len);
 //void write_dgus_vp(uint32_t addr, uint8_t *buf, uint8_t len);
 
 /**
+ * @brief DGUS 核握手有界等待（带超时）
+ * @details 正常一次握手在几十微秒内完成；超时（约 10ms）说明 OS 核异常或
+ *          总线被长期占用。返回 0 时调用方必须立即 RAMMODE=0 并放弃本次访问，
+ *          否则主循环会永久卡死在这里。供需要直接操作 ADR/APP_EN 的模块
+ *          （如 PageFunction、二维码批量绘制）复用。
+ * @return 1 握手成功，0 超时
+ */
+uint8_t SysDgusWaitAck(void);
+uint8_t SysDgusWaitEn(void);
+
+/**
  * @brief 将数值转换为ASCII字符并复制到指定数组
  * @param[in] arr 目标数组
  * @param[in] value 要转换的数值

@@ -18,70 +18,48 @@
 
 uvb：（单独控制或单独连接端子）
     A.app 小程序 控制屏可控制UVB 1-4档亮度调节、(1档：0-18/2档：18-25/3档：25-64/4档：64-87.5按照弗格森四区间控制）时间控制（2小时/4小时/6小时/8小时）
-    B. UVB波段（253.7nm）有助于补钙，仿晒太阳
+   
 
 
 雾化：雾化片+雾化液检测
     A.	app 小程序 控制屏可控制开关雾化片，能够根据舱内湿度传感器需要加湿量调节，水位传感器检测雾化液，加液提醒。
     B.	单次运行0.5/1/2小时，间隔时间为2/4/8/12小时
-                     C.直径16mm/频率100-115KHz/工作电压3-12v/谐振阻抗≤180/静态电容量3000±15%/机电藕合系数≥60%/厚度0.05mm/孔目数1-5000/孔径3-20Um/堵孔率≤2%
+                    
 
 照明：（单独控制或单独连接端子）
-    A.app 小程序 控制屏可控制灯光1-4档亮度调节（1档：弱光/2档正常光/3-4档强光）
-
+    A.app 小程序 控制屏可控制灯光1-4档亮度调节
 
 加热模块:
     A.app 小程序 控制屏可控制温度20-35度(开启时快速升温达到指定温度，
      传感器反馈温度达到了停止加热，温度没达到差-5°正常加热
     （进风风扇和加热模块同步开起，关闭时进风风扇比加热模块晚5秒关闭）
-    B.采用220V的PTC加热元件，提供安全的加热能力，PTC根据环境温度调节加热功率；1路400W PTC加热器是否能兼容，220V/110V通用。
+ 
 
 紫外线消杀（uvc）：（单独控制或单独连接端子）
     A.	app 小程序 控制屏可控制开关时间（15分钟/30分钟/1小时）
-    B.	紫外线UVC（253.7nm）杀菌功能，对空气进行深度消毒，
-    C.	消毒需要显示屏确认舱内是否有宠物,并触发物理开关开始工作
-
-
 红外线：（单独控制或单独连接端子）
     A.光线较暗自动开启/光线强自动关闭（开启后 摄像头LRcat模式自动开启）
-    B.红外线波段（940nm）夜间照明摄像头观察清晰
+    
 
 负离子：
     A.app 小程序 控制屏可控制开关(开启时进风自动开启）
-    B.	尺寸42*24*21mm/工作环境-20到80度/功率12v/0.3ma/输出高压-4500v±500v/负离子浓度1000万pcs/cm?
+    
 
 等离子：
     A.app 小程序 控制屏可控制开关(开启时进风自动开启）
-    C.	尺寸42*24*21mm/功率0.5w/输出高压±5000v±500v/正离子浓度1000万pcs/cm?/负离子浓度1000万pcs/cm?/工作环境-20到75度/湿度＜75%湿度越高噪音越大/等离子发射头针尖距10-50mm
+  
 
-
-
-
-传感器：（湿度+温度传感器）可控制pc板
-摄像头：
-    A.app 小程序可控制开关
-    B. 搭载160°超广角1080P高清
-    C.
-        1.可通过app，小程序共享摄像头，
-    2.视频可分段上传云端，可分享媒体如 微信 抖音 小红书等
-    3.光线暗摄像头LRcat模式红外线自动开启
-    4.语音相互接收内置麦克风和扬声器支持语音采集与播放，
-      可双向通话或语音控制互动，可消除回音背景等，MIC和SPEAKER集成在摄像头模块
 
 电磁锁：
     A.只可控制屏输入电磁锁开启（后台可一键同步开启多台电磁门）
-    B. 12V/0.5A/80克力/10秒
+ 
 
-智能连接管理：1. 支持双频Wi-Fi和蓝牙，确保设备可轻松接入网络
-2.后台数据可快速了解设备运行状况，客户下达指令后台可查询是否同步
-3.后台可帮客户解绑二维码
-4.二维码只可绑定一人，功能控制权管理，由绑定人分享它人
 
-    *服务器与本地控制立即同步 UI；主控应答只更新运行、联动和队列状态。
 */
 #include "sys.h"
 #include "t5l_stc.h"
 #include "uart.h"
+#include "timer.h"
 #include "string.h"
 #if v851PROTOCOL_ENABLED
 #include "v851_protocol.h"
@@ -89,6 +67,9 @@ uvb：（单独控制或单独连接端子）
 DeviceCtrl G_Device_Ctrl;
 DeviceCtrl G_Back_Device_Ctrl;
 static uint8_t t5l_factory_reset_pending;
+/* STC 复位重同步：收到 0x611D 后逐步重发已开启设备的参数 */
+static uint8_t stc_resync_pending;
+static uint8_t stc_resync_step;
 
 #define WAIT_ACK_TIMEOUT 1000 //等待应答超时时间
 #define WAIT_ACK_ERROR_CNT 2  //等待应答错误次数
@@ -558,7 +539,15 @@ void T5l_Stc_Init(void)
 
 void Queue_Push(uint8_t *buf, uint8_t len)
 {
+    uint8_t next;
     if (len > 20)
+        return;
+    /* 队列满（tail 追上 head）时丢弃本条：否则会覆盖正在等待应答的条目，
+       Queue_Sta_Poll 用 last_head 重发时就会把错误的数据发给下位机 */
+    next = G_Queue.tail + 1;
+    if (next >= 16)
+        next = 0;
+    if (next == G_Queue.head)
         return;
     memcpy(G_Queue.Data[G_Queue.tail].buf, buf, len);
     G_Queue.Data[G_Queue.tail].len = len;
@@ -630,11 +619,13 @@ void Queue_Sta_Poll(void)
     if (G_Queue.showsuccse_sta == 1)
     {
         G_Queue.showsuccse_sta = 0;
-        write_dgus_vp(0x535A, "\x00\x00", 1);
+        write_dgus_vp(0x535C, "\x00\x00", 1);
     }
 }
 
 //将时间间隔档位转换为秒数 time_tpye 0=间隔时间  1=单次运行时间
+//注：排风/雾化/UVB/UVC 的运行与间隔定时任务已全部移除，本函数当前无调用点，
+//    保留以便后续恢复定时功能（不调用时不会链接进固件）
 uint32_t Get_Interval_Run_Sec(DEV_TYPE dev_type, uint8_t time_tpye, uint16_t th)
 {
 
@@ -733,7 +724,7 @@ uint32_t Get_Interval_Run_Sec(DEV_TYPE dev_type, uint8_t time_tpye, uint16_t th)
 
         break;
     case Type_MIST:
-        if (time_tpye == 0)
+        if (time_tpye == 0) /* 间隔：1=2h 2=4h 3=8h 4=12h */
         {
             if (th == 1)
             {
@@ -750,6 +741,21 @@ uint32_t Get_Interval_Run_Sec(DEV_TYPE dev_type, uint8_t time_tpye, uint16_t th)
             else if (th == 4)
             {
                 ts = 12 * 3600UL;
+            }
+        }
+        else if (time_tpye == 1) /* 单次运行：1=0.5h 2=1h 3=2h */
+        {
+            if (th == 1)
+            {
+                ts = 30 * 60UL;
+            }
+            else if (th == 2)
+            {
+                ts = 1 * 3600UL;
+            }
+            else if (th == 3)
+            {
+                ts = 2 * 3600UL;
             }
         }
         break;
@@ -818,17 +824,50 @@ static uint8_t T5lStcAcknowledgedRunState(uint16_t addr)
 }
 
 //应答成功回调
-void T5l_Stc_UartRxProcess(uint16_t addr)
+void T5l_Stc_UartRxProcess(uint16_t addr, uint8_t result)
 {
     uint16_t tmp;
     uint16_t time_value;
-    // uint8_t run_state;
-    if (addr >= 6100 && addr <= 0x61FF)
+    uint16_t queued_addr;
+    DATA_NODE *node;
+    if (addr >= 0x6100U && addr <= 0x61FFU)
     {
+        /* 1) 应答地址必须等于"在途帧"的地址, 否则是重发/串台的迟到帧, 丢弃。
+           若 STC 按交换字节回显地址，这里归一化为在途帧地址以兼容两种字节序 */
+        if (G_Queue.sta == STATE_WAIT_ACK)
+        {
+            node = &G_Queue.Data[G_Queue.last_head];
+            if (node->len >= 8U)
+            {
+                queued_addr = (uint16_t)(((uint16_t)node->buf[4] << 8) | node->buf[5]);
+                if (addr != queued_addr)
+                {
+                    if (addr == (uint16_t)((queued_addr >> 8) | (queued_addr << 8)))
+                    {
+                        addr = queued_addr;
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
+        /* 2) STC 说没执行 → 不弹"设定成功", 也不做乐观状态更新 */
+        if (result == 0U)
+        {
+            G_Queue.sta = STATE_WAIT_ACK_FAILURE;
+            G_Queue.err_cnt = 0;
+            write_dgus_vp(0x535C, "\x00\x01", 1); //设定成功
+            G_Queue.showsuccse_time_ms = 1000;
+            return;
+        }
+
         G_Queue.sta = STATE_WAIT_ACK_SUCCESS;
-        write_dgus_vp(0x535A, "\x00\x01", 1); //设定成功
+        write_dgus_vp(0x535C, "\x00\x02", 1); //设定成功
         G_Queue.showsuccse_time_ms = 1000;
-        // run_state = T5lStcAcknowledgedRunState(addr);
+      
         switch (addr)
         {
         case OUTWIND_CMDWORD:
@@ -847,7 +886,7 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
                 G_Device_Ctrl.Exhaust.auto_vent_en = 1;
                 G_Device_Ctrl.Exhaust.enable = 1;
                 G_Device_Ctrl.Exhaust.running = TRUE;
-                G_Device_Ctrl.Exhaust.running_time_sec = OUTWIND_AUTO_RUN_TIME_SEC;
+                /* 排风运行时/间隔时长仅保存用于显示，不再启动到时自动关闭/间隔自动重开计时 */
                 read_dgus_vp(OUTWIND_VP + 2, (uint8_t *)&time_value, 1);
                 if (time_value != G_Device_Ctrl.Exhaust.interval_time_h)
                 {
@@ -916,8 +955,8 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
             {
                 G_Device_Ctrl.UVC.enable = 1;
                 SwitchPageById(13);
+                /* 仅读取并保存消杀时长档位用于显示/记忆；不再启动到时自动关闭计时 */
                 read_dgus_vp(UVC_VP + 1, (uint8_t *)&G_Device_Ctrl.UVC.running_time_h, 1);
-                G_Device_Ctrl.UVC.running_time_s = Get_Interval_Run_Sec(Type_UVC, 1, G_Device_Ctrl.UVC.running_time_h);
             }
 
             Start_Once_SaveData();
@@ -938,6 +977,7 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
                 G_Device_Ctrl.UVB.auto_UVB_en = 1;
                 G_Device_Ctrl.UVB.enable = 1;
                 G_Device_Ctrl.UVB.running = TRUE;
+                G_Device_Ctrl.UVB.run_status = 0; //清除遗留的运行到点标志，避免重新使能时被立即误关
 
                 write_dgus_vp(UVB_VP, (uint8_t *)&G_Device_Ctrl.UVB.enable, 1); //更新设置页图标开关状态
             }
@@ -956,29 +996,19 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
                 G_Device_Ctrl.UVB.running_time_h = time_value;
                 Start_Once_SaveData();
             }
-
-            G_Device_Ctrl.UVB.running_time_s = Get_Interval_Run_Sec(Type_UVB, 1, G_Device_Ctrl.UVB.running_time_h);
+            /* 运行时长档位仅保存用于显示；不再启动到时自动关闭/间隔自动重开计时 */
             break;
         case HEATER_CMDWORD:
             if (G_Device_Ctrl.Heater.enable == 1)
             {
-                G_Device_Ctrl.Inlet_Fan.heater_auto_en = 0;
-                G_Device_Ctrl.Inlet_Fan.off_delay_sec = 5;
-
                 G_Device_Ctrl.Heater.running = FALSE;
 
-                if (G_Device_Ctrl.Heater.aotu_heater_en == 0)
-                {
-                    G_Device_Ctrl.Heater.enable = 0;
-                    write_dgus_vp(HEATER_VP, (uint8_t *)&G_Device_Ctrl.Heater.enable, 1); //更新设置页图标开关状态
-                }
+                G_Device_Ctrl.Heater.enable = 0;
+                write_dgus_vp(HEATER_VP, (uint8_t *)&G_Device_Ctrl.Heater.enable, 1); //更新设置页图标开关状态
+                
             }
             else
             {
-                G_Device_Ctrl.Inlet_Fan.heater_auto_en = 1;
-                G_Device_Ctrl.Inlet_Fan.run_status = 1;
-
-                G_Device_Ctrl.Heater.aotu_heater_en = 1;
                 G_Device_Ctrl.Heater.enable = 1;
                 G_Device_Ctrl.Heater.run_status = 2;
                 G_Device_Ctrl.Heater.running = TRUE;
@@ -993,21 +1023,14 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
             }
 
             break;
-        case 0x6108:
-
-            break;
         case ANION_CMDWORD: // NAI
              if (G_Device_Ctrl.Anion.enable == 0)
             {
-                G_Device_Ctrl.Inlet_Fan.anion_auto_en = 1;
-
                 G_Device_Ctrl.Anion.enable = 1;
                 G_Device_Ctrl.Anion.running = TRUE;
             }
             else
             {
-                G_Device_Ctrl.Inlet_Fan.anion_auto_en = 0;
-                G_Device_Ctrl.Inlet_Fan.run_status = 1;
                 G_Device_Ctrl.Anion.enable = 0;
                 G_Device_Ctrl.Anion.running = FALSE;
             }
@@ -1016,14 +1039,11 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
         case PLASMA_CMDWORD: // PLASMA
             if (G_Device_Ctrl.Plasma.enable == 0)
             {
-                G_Device_Ctrl.Inlet_Fan.plasma_auto_en = 1;
                 G_Device_Ctrl.Plasma.enable = 1;
                 G_Device_Ctrl.Plasma.running = TRUE;
             }
             else
             {
-                G_Device_Ctrl.Inlet_Fan.plasma_auto_en = 0;
-                G_Device_Ctrl.Inlet_Fan.run_status = 1;
                 G_Device_Ctrl.Plasma.enable = 0;
                 G_Device_Ctrl.Plasma.running = FALSE;
             }
@@ -1047,35 +1067,25 @@ void T5l_Stc_UartRxProcess(uint16_t addr)
                 G_Device_Ctrl.Humidifier.auto_mist_en = 1;
                 G_Device_Ctrl.Humidifier.enable = 1;
                 G_Device_Ctrl.Humidifier.running = TRUE;
+                G_Device_Ctrl.Humidifier.run_status = 0; //清除遗留的运行到点标志，避免重新使能时被立即误关
 
                 write_dgus_vp(MIST_VP, (uint8_t *)&G_Device_Ctrl.Humidifier.enable, 1); //更新设置页图标开关状态
             }
 
             read_dgus_vp(MIST_VP + 1, (uint8_t *)&time_value, 1);
-            if (time_value != G_Device_Ctrl.Humidifier.running_time_h)
-            {
-                G_Device_Ctrl.Humidifier.running_time_h = time_value;
-                Start_Once_SaveData();
-            }
-
-            read_dgus_vp(MIST_VP + 2, (uint8_t *)&time_value, 1);
             if (time_value != G_Device_Ctrl.Humidifier.interval_time_h)
             {
                 G_Device_Ctrl.Humidifier.interval_time_h = time_value;
                 Start_Once_SaveData();
             }
-            if (G_Device_Ctrl.Humidifier.running_time_h == 1)
+
+            read_dgus_vp(MIST_VP + 2, (uint8_t *)&time_value, 1);
+            if (time_value != G_Device_Ctrl.Humidifier.running_time_h)
             {
-                G_Device_Ctrl.Humidifier.running_time_s = 1800; // sec
+                G_Device_Ctrl.Humidifier.running_time_h = time_value;
+                Start_Once_SaveData();
             }
-            else if (G_Device_Ctrl.Humidifier.running_time_h == 2)
-            {
-                G_Device_Ctrl.Humidifier.running_time_s = 3600; // sec
-            }
-            else if (G_Device_Ctrl.Humidifier.running_time_h == 3)
-            {
-                G_Device_Ctrl.Humidifier.running_time_s = 7200; // sec
-            }
+            /* 运行/间隔档位仅保存用于显示；不再启动到时自动关闭/间隔自动重开计时 */
             break;
         case LOCK_CMDWORD:
             break;
@@ -1128,33 +1138,28 @@ void Stc_FlashBackup(void)
 }
 
 /*
-/*
-cmd
-0x6100	排风扇_档位设置
-0x6101	进风扇 档位设置
-0x6103	照明灯_档位设置
-0x6104	红外灯_开关设置
-0x6105	UVC_开关设置
-0x6106	UVB_档位设置
-0x6107	加热器_开关设置
-
-0x6109	负离子_开关设置
-0x610A	等离子_开关设置
-
-0x610B	雾化器_开关设置
-0x610C	锁_开关设置
+cmd（依据 Docs/功能.docx 指令表，数据统一 2 字节）
+0x6110 加热功能(0/1)     0x6111 加热设定温度(℃)
+0x6112 雾化功能(0/1)     0x6113 雾化运行时间(min)  0x6114 雾化间隔时间(min)
+0x6115 排风功能(0/1)     0x6116 排风档位(0~6)      0x6117 排风间隔时间(min)
+0x6118 UVB功能(0/1)      0x6119 UVB档位(0~4)       0x611A UVB间隔时间(min)
+0x611B 紫外消杀功能(0/1) 0x611C 紫外消杀时间(min)
+0x611D STC复位通知(STC→T5L，1=已复位)
+文档未定义新地址的设备沿用原地址：
+0x6101/0x6102 进风、0x6103 照明、0x6104 红外、0x6109 负离子、
+0x610A 等离子、0x610C 锁、0x610D 小风扇、0x610E/0x610F 麦克/摄像灯
 
 run_sta:
--对只用开关的设备0=OFF，1=ON
--对有档位的设备0=OFF，1~n档位
+-只用开关的设备：0=OFF，1=ON
+-有档位的设备：0=OFF，1~n=档位
 */
 
-void Send_Cmd_Ctrl(uint16_t cmdword, uint8_t run_sta)
+void Send_Cmd_Ctrl(uint16_t cmdword, uint16_t value)
 {
     uint8_t cmdbuf[16];
     uint8_t t_len = 0;
     uint16_t crc;
-    if (cmdword < 0x6100 || cmdword > 0x6110)
+    if (cmdword < 0x6100U || cmdword > 0x61FFU)
         return;
     cmdbuf[t_len++] = 0x5A;
     cmdbuf[t_len++] = 0xA5;
@@ -1165,18 +1170,9 @@ void Send_Cmd_Ctrl(uint16_t cmdword, uint8_t run_sta)
     *(uint16_t *)&cmdbuf[t_len] = cmdword;
     t_len += 2;
 
-    if (run_sta)
-    {
-        //打开
-        cmdbuf[t_len++] = 0;
-        cmdbuf[t_len++] = run_sta;
-    }
-    else
-    {
-        //关闭
-        cmdbuf[t_len++] = 0;
-        cmdbuf[t_len++] = OFF;
-    }
+    /* 数据统一 2 字节（1 个字），高字节在前 */
+    cmdbuf[t_len++] = (uint8_t)(value >> 8);
+    cmdbuf[t_len++] = (uint8_t)value;
 
     //校验
     crc = crc_16((uint8_t *)&cmdbuf[3], t_len - 3);
@@ -1185,6 +1181,48 @@ void Send_Cmd_Ctrl(uint16_t cmdword, uint8_t run_sta)
     // t_len += 2;
     cmdbuf[2] = t_len - 3; // 长度
     //添加到发送队列
+    Queue_Push(cmdbuf, t_len);
+}
+
+/**
+ * @brief 按"功能块"下发：从 cmdword 起连续写 count 个字（一条 82 命令）
+ * @details 依据 Docs/功能.docx 的指令表，一个功能的开关+参数占用连续地址，
+ *          一次写入可保证 STC 侧拿到成套参数，且只产生一次应答。
+ * @param[in] cmdword 功能块起始地址（0x6100~0x61FF）
+ * @param[in] words 字数组（每项 16 位，高字节在前）
+ * @param[in] count 字数 1~4
+ */
+void Send_Cmd_Block(uint16_t cmdword, uint16_t *words, uint8_t count)
+{
+    uint8_t cmdbuf[20];
+    uint8_t t_len = 0;
+    uint8_t i;
+    uint16_t crc;
+
+    if ((cmdword < 0x6100U) || (cmdword > 0x61FFU) ||
+        (words == NULL) || (count == 0U) || (count > 4U))
+    {
+        return;
+    }
+
+    cmdbuf[t_len++] = 0x5A;
+    cmdbuf[t_len++] = 0xA5;
+    cmdbuf[t_len++] = 0x00; //长度
+    cmdbuf[t_len++] = 0x82;
+
+    *(uint16_t *)&cmdbuf[t_len] = cmdword;
+    t_len += 2;
+
+    for (i = 0; i < count; i++)
+    {
+        cmdbuf[t_len++] = (uint8_t)(words[i] >> 8);
+        cmdbuf[t_len++] = (uint8_t)words[i];
+    }
+
+    crc = crc_16((uint8_t *)&cmdbuf[3], t_len - 3);
+    cmdbuf[t_len++] = (uint8_t)(crc & 0x00FF);
+    cmdbuf[t_len++] = (uint8_t)(crc >> 8);
+    cmdbuf[2] = t_len - 3; // 长度
     Queue_Push(cmdbuf, t_len);
 }
 /**
@@ -1244,18 +1282,104 @@ static uint8_t T5lStcServiceFactoryReset(void)
     return 1U;
 }
 
+/* STC 复位（0x611D=1）后重同步：按屏端现有设备状态逐条重发指令，让外设重新运行。
+   仅重发"当前为开启"的设备（STC 复位后外设默认关闭，关闭项无需再发关命令）。
+   顺序：加热 → 雾化 → 灯光 → 排风 → 负离子 → UVB → 等离子 → 紫外消杀 */
+static void StcResyncStep(void)
+{
+    uint16_t words[2];
+
+    if (stc_resync_pending == 0U)
+    {
+        return;
+    }
+    /* 等队列彻底空（含正在等待应答的那条）再发下一条 */
+    if ((G_Queue.sta != STATE_IDLE) || (G_Queue.head != G_Queue.tail))
+    {
+        return;
+    }
+
+    switch (stc_resync_step)
+    {
+    case 0U: /* 加热 */
+        if (G_Device_Ctrl.Heater.enable == 1U)
+        {
+            Heater_On(G_Device_Ctrl.Heater.target_temp);
+        }
+        break;
+    case 1U: /* 雾化 */
+        if ((G_Device_Ctrl.Humidifier.enable == 1U) &&
+            (G_Device_Ctrl.Humidifier.liquid_status != 2U))
+        {
+            Humidifier_On();
+        }
+        break;
+    case 2U: /* 灯光 */
+        if (G_Device_Ctrl.Light.enable == 1U)
+        {
+            Light_On(G_Device_Ctrl.Light.brightness);
+        }
+        break;
+    case 3U: /* 排风 */
+        if (G_Device_Ctrl.Exhaust.enable == 1U)
+        {
+            Exhaust_On();
+        }
+        break;
+    case 4U: /* 负离子 */
+        if (G_Device_Ctrl.Anion.enable == 1U)
+        {
+            Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable, ANION_CMDWORD, 1U);
+        }
+        break;
+    case 5U: /* UVB */
+        if (G_Device_Ctrl.UVB.enable == 1U)
+        {
+            UVB_On(G_Device_Ctrl.UVB.brightness);
+        }
+        break;
+    case 6U: /* 等离子 */
+        if (G_Device_Ctrl.Plasma.enable == 1U)
+        {
+            Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable, PLASMA_CMDWORD, 1U);
+        }
+        break;
+    case 7U: /* 紫外消杀：直接下发开关+时长，不能走 UVC_On（它会先关闭所有设备） */
+        if (G_Device_Ctrl.UVC.enable == 1U)
+        {
+            read_dgus_vp(UVC_VP + 1, (uint8_t *)&G_Device_Ctrl.UVC.running_time_h, 1);
+            words[0] = 1U;
+            words[1] = (uint16_t)(Get_Interval_Run_Sec(Type_UVC, 1, G_Device_Ctrl.UVC.running_time_h) / 60UL);
+            Send_Cmd_Block(UVC_CMDWORD, words, 2U);
+        }
+        break;
+    default:
+        break;
+    }
+
+    stc_resync_step++;
+    if (stc_resync_step >= 8U)
+    {
+        stc_resync_step = 0U;
+        stc_resync_pending = 0U;
+    }
+}
+
 void T5L_Stc_Poll(void)
 {
+
     if(T5lStcServiceFactoryReset() != 0U)
     {
         return;
     }
+
     Queue_Pop_Poll();
     Queue_Sta_Poll();
-    DeRun_Auto();
+    // DeRun_Auto();
     Sys_Cfg();
     Flash_SaveData();
     Dev_Aotu_Procese();
+    StcResyncStep();
     key_scanf();
 }
 //系统配置,此方式配置的参数,是掉电不保存的
@@ -1285,54 +1409,119 @@ void sys_config(uint8_t is_beep, uint8_t is_sleep)
     write_dgus_vp(CONFIG_ADDR, config_cmd, 2);
 }
 
+/* 排风：一次下发 [功能 0/1, 档位 0~6, 间隔分钟] 三个字（0x6115~0x6117） */
 void Exhaust_On()
 {
-    G_Device_Ctrl.Exhaust.enable = 0;
+    uint16_t words[3];
+    uint16_t interval_code;
 
+    G_Device_Ctrl.Exhaust.enable = 0;
     read_dgus_vp(OUTWIND_VP + 1, (uint8_t *)&G_Device_Ctrl.Exhaust.target_speed, 1);
-    Send_Cmd_Ctrl(OUTWIND_CMDWORD, G_Device_Ctrl.Exhaust.target_speed);
+    read_dgus_vp(OUTWIND_VP + 2, (uint8_t *)&interval_code, 1);
+
+    words[0] = 1U;                                                                         /* 功能开 */
+    words[1] = G_Device_Ctrl.Exhaust.target_speed;                                         /* 档位 1~6 */
+    words[2] = (uint16_t)(Get_Interval_Run_Sec(Type_OutWind, 0, interval_code) / 60UL);     /* 间隔分钟 */
+    Send_Cmd_Block(OUTWIND_CMDWORD, words, 3U);
 }
 
 //正常关闭auto_flag=0; 定时间隔关闭auto_flag=1;0更新开关状态  1不更新开关状态
 void Exhaust_Off(uint8_t auto_flag)
 {
+    uint16_t words[1];
+
     G_Device_Ctrl.Exhaust.enable = 1;
 
     G_Device_Ctrl.Exhaust.auto_vent_en = auto_flag;
+    if (auto_flag == 0)
+    {
+        /* 总开关关闭：停止自动循环，清运行/间隔状态，避免残留状态导致再次开启时误动作 */
+        G_Device_Ctrl.Exhaust.run_status = 0;
+        G_Device_Ctrl.Exhaust.running_time_sec = 0;
+        G_Device_Ctrl.Exhaust.interval_time_sec = 0;
+    }
     G_Device_Ctrl.Exhaust.target_speed = 0;
-    Send_Cmd_Ctrl(OUTWIND_CMDWORD, (uint8_t)G_Device_Ctrl.Exhaust.target_speed);
+
+    /* 只关闭功能位，档位/间隔保留在 STC 侧 */
+    words[0] = 0U;
+    Send_Cmd_Block(OUTWIND_CMDWORD, words, 1U);
 }
 
+/* 雾化：一次下发 [功能 0/1, 运行分钟, 间隔分钟] 三个字（0x6112~0x6114） */
 void Humidifier_On()
 {
+    uint16_t words[3];
+    uint16_t run_code;
+    uint16_t interval_code;
+
     if(G_Device_Ctrl.Humidifier.liquid_status!=2 ){
         G_Device_Ctrl.Humidifier.enable = 0;
-        Send_Cmd_Ctrl(HUMIDIFIER_CMDWORD, 1);
+        read_dgus_vp(MIST_VP + 2, (uint8_t *)&run_code, 1);      /* 运行时长档位 */
+        read_dgus_vp(MIST_VP + 1, (uint8_t *)&interval_code, 1); /* 间隔时长档位 */
+
+        words[0] = 1U;
+        words[1] = (uint16_t)(Get_Interval_Run_Sec(Type_MIST, 1, run_code) / 60UL);      /* 运行分钟 */
+        words[2] = (uint16_t)(Get_Interval_Run_Sec(Type_MIST, 0, interval_code) / 60UL); /* 间隔分钟 */
+        Send_Cmd_Block(HUMIDIFIER_CMDWORD, words, 3U);
     }
 }
 
 //正常关闭auto_flag=0; 定时间隔关闭auto_flag=1;0更新开关状态  1不更新开关状态
 void Humidifier_Off(uint8_t auto_flag)
 {
+    uint16_t words[1];
+
     G_Device_Ctrl.Humidifier.auto_mist_en = auto_flag;
     G_Device_Ctrl.Humidifier.enable = 1;
-    Send_Cmd_Ctrl(HUMIDIFIER_CMDWORD, 0);
+    if (auto_flag == 0)
+    {
+        /* 总开关关闭：停止自动循环，清运行/间隔状态 */
+        G_Device_Ctrl.Humidifier.run_status = 0;
+        G_Device_Ctrl.Humidifier.running_time_s = 0;
+        G_Device_Ctrl.Humidifier.interval_time_s = 0;
+    }
+    /* 只关闭功能位，运行/间隔保留在 STC 侧 */
+    words[0] = 0U;
+    Send_Cmd_Block(HUMIDIFIER_CMDWORD, words, 1U);
 }
 
+/* UVB：一次下发 [功能 0/1, 档位 0~4, 间隔分钟] 三个字（0x6118~0x611A）
+   间隔按"24h 周期扣掉运行段"给出，与文档"运行时间"档位配合 */
 void UVB_On(uint16_t target_brightness)
 {
+    uint16_t words[3];
+    uint16_t run_min;
+
     G_Device_Ctrl.UVB.enable = 0;
     G_Device_Ctrl.UVB.target_brightness = target_brightness;
-    Send_Cmd_Ctrl(UVB_CMDWORD, (uint8_t)target_brightness);
+    read_dgus_vp(UVB_VP + 2, (uint8_t *)&G_Device_Ctrl.UVB.running_time_h, 1);
+
+    run_min = (uint16_t)(Get_Interval_Run_Sec(Type_UVB, 1, G_Device_Ctrl.UVB.running_time_h) / 60UL);
+
+    words[0] = 1U;
+    words[1] = target_brightness;                                          /* 档位 1~4 */
+    words[2] = (uint16_t)((24UL * 60UL) - run_min);                        /* 间隔分钟 */
+    Send_Cmd_Block(UVB_CMDWORD, words, 3U);
 }
 
 //正常关闭auto_flag=0; 定时间隔关闭auto_flag=1;0更新开关状态  1不更新开关状态
 void UVB_Off(uint8_t auto_flag)
 {
-   G_Device_Ctrl.UVB.auto_UVB_en = auto_flag;
+    uint16_t words[1];
+
+    G_Device_Ctrl.UVB.auto_UVB_en = auto_flag;
     G_Device_Ctrl.UVB.enable = 1;
     G_Device_Ctrl.UVB.target_brightness = 0;
-    Send_Cmd_Ctrl(UVB_CMDWORD, (uint8_t)G_Device_Ctrl.UVB.target_brightness);
+    if (auto_flag == 0)
+    {
+        /* 总开关关闭：停止自动循环，清运行/间隔状态 */
+        G_Device_Ctrl.UVB.run_status = 0;
+        G_Device_Ctrl.UVB.running_time_s = 0;
+        G_Device_Ctrl.UVB.interval_time_s = 0;
+    }
+    /* 只关闭功能位，档位/间隔保留在 STC 侧 */
+    words[0] = 0U;
+    Send_Cmd_Block(UVB_CMDWORD, words, 1U);
 }
 
 
@@ -1347,9 +1536,16 @@ void Close_All_Dev(){
         Exhaust_Off(0);
     }
 
+    /* 进风：联动与延时关闭逻辑已移除，关机/消杀前必须显式关闭 */
+    if ((G_Device_Ctrl.Inlet_Fan.enable == 1) ||
+        (G_Device_Ctrl.Inlet_Fan.target_speed != 0))
+    {
+        InWind_Off();
+    }
+
     if (G_Device_Ctrl.Heater.enable == 1)
     {
-        Heater_Off(0);
+        Heater_Off();
     }
 
     if (G_Device_Ctrl.Light.enable == 1)
@@ -1383,21 +1579,30 @@ void Close_All_Dev(){
 
 
 
+/* 紫外消杀：一次下发 [功能 0/1, 消杀分钟] 两个字（0x611B~0x611C） */
 void UVC_On()
 {
+    uint16_t words[2];
+
     memcpy(&G_Back_Device_Ctrl, &G_Device_Ctrl, sizeof(DeviceCtrl));
     Close_All_Dev();
 
     G_Device_Ctrl.UVC.enable = 0;
-    Send_Cmd_Ctrl(UVC_CMDWORD, 1);
+    read_dgus_vp(UVC_VP + 1, (uint8_t *)&G_Device_Ctrl.UVC.running_time_h, 1); /* 消杀时长档位 */
+    words[0] = 1U;
+    words[1] = (uint16_t)(Get_Interval_Run_Sec(Type_UVC, 1, G_Device_Ctrl.UVC.running_time_h) / 60UL);
+    Send_Cmd_Block(UVC_CMDWORD, words, 2U);
 }
 
 
 
 void UVC_Off()
 {
+    uint16_t words[1];
+
     G_Device_Ctrl.UVC.enable = 1;
-    Send_Cmd_Ctrl(UVC_CMDWORD, 0);
+    words[0] = 0U;
+    Send_Cmd_Block(UVC_CMDWORD, words, 1U);
 
     if (G_Back_Device_Ctrl.Exhaust.enable == 1)
     {
@@ -1442,42 +1647,36 @@ void UVC_Off()
 
 
 
-//目标值传入target_tmp
+/* 加热：一次下发 [功能 0/1, 设定温度℃] 两个字（0x6110~0x6111）
+   恒温判断由 STC 主控完成，屏端只负责下发开关与目标温度 */
 void Heater_On(int16_t target_tmp)
 {
+    uint16_t words[2];
+
     G_Device_Ctrl.Heater.target_temp = (uint16_t)target_tmp;
 
-    if (G_Device_Ctrl.environment.GXHTC3_err_sta != 0 && G_Device_Ctrl.environment.NTC_err_sta != 0)
-    {
-        Heater_Off(0);
-        return;
-    }
+    /* 保护：温湿度与 NTC 双传感器都故障时不开启加热 */
+    // if (G_Device_Ctrl.environment.GXHTC3_err_sta != 0 && G_Device_Ctrl.environment.NTC_err_sta != 0)
+    // {
+    //     Heater_Off();
+    //     return;
+    // }
 
-    // G_Device_Ctrl.Heater.target_temp=(uint16_t)target_tmp;
-    //判断温差
-    if (G_Device_Ctrl.environment.temperature  < G_Device_Ctrl.Heater.target_temp)
-    {
-        G_Device_Ctrl.Heater.enable = 0;
-        Send_Cmd_Ctrl(HEATER_CMDWORD, 1);
-    }
-    else
-    {
-        G_Device_Ctrl.Heater.aotu_heater_en = 1;
-        G_Device_Ctrl.Heater.enable = 1;
-        G_Device_Ctrl.Heater.running = 1;
-        write_dgus_vp(HEATER_VP, "\x00\x01", 1);
-        Start_Once_SaveData();
-        write_dgus_vp(0x535A, "\x00\x01", 1); //设定成功
-        G_Queue.showsuccse_time_ms = 1000;
-    }
+    G_Device_Ctrl.Heater.enable = 0;
+    words[0] = (uint16_t)target_tmp;
+    words[1] = 1U;
+    Send_Cmd_Block(HEATER_CMDWORD, words, 2U);
 }
 
-//正常关闭auto_flag=0; 定时间隔关闭auto_flag=1;0更新开关状态  1不更新开关状态
-void Heater_Off(uint8_t auto_flag)
+//加热自动温控任务已移除，改为纯手动开关，故不再需要 auto_flag
+void Heater_Off(void)
 {
-    G_Device_Ctrl.Heater.aotu_heater_en = auto_flag;
+    uint16_t words[1];
+
+    G_Device_Ctrl.Heater.run_status = 1;
     G_Device_Ctrl.Heater.enable = 1;
-    Send_Cmd_Ctrl(HEATER_CMDWORD, 0);
+    words[0] = 0U;
+    Send_Cmd_Block(HEATER_CMDWORD, words, 1U);
 }
 
 void InWind_On(uint16_t speed)
@@ -1664,11 +1863,18 @@ void PageFunction(void)
     ADR_L = 0x0a;
     ADR_INC = 1;
     RAMMODE = 0xAF;
-    while (!APP_ACK)
-        ;
+    /* 有界等待：OS 核无应答时放弃本次读页号，避免 500ms 任务永久卡死 */
+    if (!SysDgusWaitAck())
+    {
+        RAMMODE = 0;
+        return;
+    }
     APP_EN = 1;
-    while (APP_EN)
-        ;
+    if (!SysDgusWaitEn())
+    {
+        RAMMODE = 0;
+        return;
+    }
     pageid = DATA3;
     pageid <<= 8;
     pageid |= DATA2;
@@ -1766,6 +1972,19 @@ void key_scanf(void)
     read_dgus_vp(0x5300, (uint8_t *)&key_value, 1);
     if (key_value != 0)
     {
+        /* 屏保态下 DGUS 可能不执行页面切换，导致"点了没反应"。
+           任何按键到来时先退出屏保、恢复背光并清屏保图，保证切页类按键生效 */
+        if (G_Device_Ctrl.Cfg.off_display_flag != 0U)
+        {
+            u8buf[0] = G_Device_Ctrl.Cfg.ligth_value;
+            u8buf[1] = G_Device_Ctrl.Cfg.ligth_value;
+            write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);      //恢复背光
+            write_dgus_vp(0x603, "\x00\x00", 1);            //退出屏保图
+            G_Device_Ctrl.Cfg.off_display_flag &= 0x0F;     //回到"未进屏保"
+            G_Device_Ctrl.Cfg.off_display_time_s =
+                (uint16_t)(G_Device_Ctrl.Cfg.off_display_time_min * 5U * 60U);
+        }
+
         // Send_Cmd_Ctrl(Exhaust,1,1,3);
         // UartSendData(&Uart2,"\xAA\xFF\n",3);
 
@@ -1962,7 +2181,7 @@ void key_scanf(void)
             }
             else
             {
-                Heater_Off(0);
+                Heater_Off();
             }
             break;
         case 0x601: //加热-确定
@@ -2424,23 +2643,32 @@ uint8_t screen_touch(void)
 {
     uint8_t rewrite[2];
     uint16_t touch_data[3];
+    uint8_t touch_sta;
+
     rewrite[0] = 0x00;
 
     read_dgus_vp(SCREEN_TOUCH_ADDR, (uint8_t *)touch_data, 3);
     if ((touch_data[0] >> 8) == 0x5A)
     {
-        if(touch_data[0]&0x0001){
+        touch_sta = (uint8_t)(touch_data[0] & 0xFF);
+
+        /* 抬起事件：关机态下用于唤醒开机（与原逻辑一致） */
+        if ((touch_sta & 0x02) != 0U)
+        {
+            if (G_Device_Ctrl.dev_enable == 0)
+            {
+                G_Device_Ctrl.dev_enable = 1;
+            }
+        }
+
+        rewrite[1] = touch_sta;
+        write_dgus_vp(SCREEN_TOUCH_ADDR, (uint8_t *)rewrite, 1);
+
+        /* 按下(1)/抬起(2)/按压中(3) 任一状态都算"有触摸"，用于立即退出屏保 */
+        if ((touch_sta & 0x03) != 0U)
+        {
             return 1;
         }
-        else if(touch_data[0]&0x0002)
-        {
-           if (G_Device_Ctrl.dev_enable==0)
-           {
-                G_Device_Ctrl.dev_enable=1;
-           }
-        }
-        rewrite[1] = touch_data[0] & 0xff;
-        write_dgus_vp(SCREEN_TOUCH_ADDR, (uint8_t *)rewrite, 1);
     }
     return 0;
 }
@@ -2455,15 +2683,21 @@ void Sys_Cfg(void)
 
     if (screen_touch())
     {
+        /* 只要屏幕被触摸就退出屏保：重置计时、恢复背光、退出屏保图、清屏保标志。
+           不依赖是否产生键值，避免屏保态下按键"点了没反应" */
         G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
-        if (page_chage == 1||G_Device_Ctrl.dev_enable==1)
+
+        if (G_Device_Ctrl.Cfg.off_display_flag != 0U)
         {
             page_chage = 0;
-            if(G_Device_Ctrl.dev_enable=1){
-                SwitchPageById(3);
-                G_Device_Ctrl.dev_enable=2;
-            }
-            // SwitchPageById(last_page);
+            G_Device_Ctrl.Cfg.off_display_flag &= 0X0F;
+
+            u8buf[0] = G_Device_Ctrl.Cfg.ligth_value;
+            u8buf[1] = G_Device_Ctrl.Cfg.ligth_value;
+            write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);   //恢复背光
+            write_dgus_vp(0x603, "\x00\x00", 1);         //退出屏保图，回到正常页面
+
+            /* 同步恢复紫外锁提示弹窗，避免弹窗状态残留 */
             if(G_Device_Ctrl.UVC.remind_flag==1){
                 write_dgus_vp(0xE8,"\x5A\x01\x00\x2C",2);
             }else if(G_Device_Ctrl.UVC.remind_flag==2){
@@ -2471,10 +2705,15 @@ void Sys_Cfg(void)
             }else{
                 write_dgus_vp(0xE8,"\x00\x00",1);
             }
-            u8buf[0] = G_Device_Ctrl.Cfg.ligth_value;
-            u8buf[1] = G_Device_Ctrl.Cfg.ligth_value;
-            write_dgus_vp(0x82, (uint8_t *)&u8buf, 1);
-            G_Device_Ctrl.Cfg.off_display_flag &= 0X0F;
+        }
+
+        //49页为首次初始化确认页：不自动跳主页，等待用户按键确认(key_scanf里处理)
+        if(G_Device_Ctrl.dev_enable==1){
+            read_dgus_vp(0x14, (uint8_t *)&tmp1, 1);
+            if (tmp1 != 49){
+                SwitchPageById(3);
+                G_Device_Ctrl.dev_enable=2;
+            }
         }
     }
 
@@ -2508,11 +2747,12 @@ void Sys_Cfg(void)
             // read_dgus_vp(0x14, (uint8_t *)&last_page, 1);
             // SwitchPageById(1);
             write_dgus_vp(0xE8,"\x5A\x01\x00\x01",2);
-            write_dgus_vp(0x603,"\x00\x01",1);
-            G_Device_Ctrl.Cfg.off_display_flag &= 0x01;
-            G_Device_Ctrl.Cfg.off_display_flag |= 0x21;
-            G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
         }
+        //每轮换周期都要执行：写屏保图1、翻转flag、重启计时(page_chage只标记已进入屏保态)
+        write_dgus_vp(0x603,"\x00\x01",1);
+        G_Device_Ctrl.Cfg.off_display_flag &= 0x01;
+        G_Device_Ctrl.Cfg.off_display_flag |= 0x21;
+        G_Device_Ctrl.Cfg.off_display_time_s = (G_Device_Ctrl.Cfg.off_display_time_min * 5 * 60);
         // G_Device_Ctrl.Cfg.off_display_flag|=0x32;
     }
     else if (G_Device_Ctrl.Cfg.off_display_flag == 0x31)
@@ -2554,19 +2794,7 @@ void Dev_Time_Check()
         }
     }
 
-    //判断紫外功能，如果开启则不进行其他设备的计时
-    if (G_Device_Ctrl.UVC.enable == 1)
-    {
-        if (G_Device_Ctrl.UVC.running_time_s)
-        {
-            G_Device_Ctrl.UVC.running_time_s--;
-            if (G_Device_Ctrl.UVC.running_time_s == 0)
-            {
-                G_Device_Ctrl.UVC.run_status = 1;
-            }
-        }
-        return;
-    }
+    /* 紫外(UVC)到时自动关闭计时已移除：消杀由用户手动关闭 */
 
     if (G_Device_Ctrl.Cfg.save_interval_times)
     {
@@ -2594,177 +2822,36 @@ void Dev_Time_Check()
         }
     }
 
-    //
-    if (G_Device_Ctrl.Exhaust.running_time_sec)
-    {
-        G_Device_Ctrl.Exhaust.running_time_sec--;
-        if (G_Device_Ctrl.Exhaust.running_time_sec == 0)
-        {
-            G_Device_Ctrl.Exhaust.run_status = 1;
-        }
-    }
-    if (G_Device_Ctrl.Exhaust.interval_time_sec)
-    {
-        G_Device_Ctrl.Exhaust.interval_time_sec--;
-        if (G_Device_Ctrl.Exhaust.interval_time_sec == 0)
-        {
-            G_Device_Ctrl.Exhaust.run_status = 2;
-        }
-    }
-
-    if (G_Device_Ctrl.Humidifier.running_time_s)
-    {
-        G_Device_Ctrl.Humidifier.running_time_s--;
-        if (G_Device_Ctrl.Humidifier.running_time_s == 0)
-        {
-            G_Device_Ctrl.Humidifier.run_status = 1;
-        }
-    }
-    if (G_Device_Ctrl.Humidifier.interval_time_s)
-    {
-        G_Device_Ctrl.Humidifier.interval_time_s--;
-        if (G_Device_Ctrl.Humidifier.interval_time_s == 0)
-        {
-            G_Device_Ctrl.Humidifier.run_status = 2;
-        }
-    }
-
-    if (G_Device_Ctrl.UVB.running_time_s)
-    {
-        G_Device_Ctrl.UVB.running_time_s--;
-        if (G_Device_Ctrl.UVB.running_time_s == 0)
-        {
-            G_Device_Ctrl.UVB.run_status = 1;
-        }
-    }
-    if (G_Device_Ctrl.UVB.interval_time_s)
-    {
-        G_Device_Ctrl.UVB.interval_time_s--;
-        if (G_Device_Ctrl.UVB.interval_time_s == 0)
-        {
-            G_Device_Ctrl.UVB.run_status = 2;
-        }
-    }
-
-    if (G_Device_Ctrl.Inlet_Fan.off_delay_sec)
-    {
-        G_Device_Ctrl.Inlet_Fan.off_delay_sec--;
-        if (G_Device_Ctrl.Inlet_Fan.off_delay_sec == 0)
-        {
-            G_Device_Ctrl.Inlet_Fan.run_status = 1;
-        }
-    }
+    /* 排风/雾化/UVB 运行间隔计时、进风延时关闭等任务已移除：计时由 STC 主控完成 */
 }
 
 void Dev_Aotu_Procese()
 {
-    if (G_Device_Ctrl.Exhaust.auto_vent_en == 1)
-    {
-        if (G_Device_Ctrl.Exhaust.run_status == 1)
-        {
-            G_Device_Ctrl.Exhaust.run_status = 0;
-            G_Device_Ctrl.Exhaust.interval_time_sec = Get_Interval_Run_Sec(Type_OutWind, 0, G_Device_Ctrl.Exhaust.interval_time_h);
-            Exhaust_Off(1);
-        }
-        if (G_Device_Ctrl.Exhaust.run_status == 2)
-        {
-            G_Device_Ctrl.Exhaust.run_status = 0;
-            Exhaust_On();
-        }
-    }
-
-    if (G_Device_Ctrl.Humidifier.auto_mist_en == 1)
-    {
-        if (G_Device_Ctrl.Humidifier.run_status == 1)
-        {
-            G_Device_Ctrl.Humidifier.run_status = 0;
-            G_Device_Ctrl.Humidifier.interval_time_s = Get_Interval_Run_Sec(Type_MIST, 0, G_Device_Ctrl.Humidifier.interval_time_h);
-            Humidifier_Off(1);
-        }
-        if (G_Device_Ctrl.Humidifier.run_status == 2)
-        {
-            G_Device_Ctrl.Humidifier.run_status = 0;
-            Humidifier_On();
-        }
-    }
-
-    if (G_Device_Ctrl.UVB.auto_UVB_en == 1)
-    {
-        if (G_Device_Ctrl.UVB.run_status == 1)
-        {
-            G_Device_Ctrl.UVB.run_status = 0;
-            G_Device_Ctrl.UVB.interval_time_s = Get_Interval_Run_Sec(Type_UVB, 0, G_Device_Ctrl.UVB.running_time_h);
-            UVB_Off(1);
-        }
-        if (G_Device_Ctrl.UVB.run_status == 2)
-        {
-            G_Device_Ctrl.UVB.run_status = 0;
-            UVB_On(G_Device_Ctrl.UVB.brightness);
-        }
-    }
-
-    if (G_Device_Ctrl.UVC.run_status == 1)
-    {
-        G_Device_Ctrl.UVC.run_status = 0;
-        UVC_Off();
-
-        //恢复其他设备的功能开关
-    }
-
-    if (G_Device_Ctrl.Heater.aotu_heater_en)
-    {
-        if ((G_Device_Ctrl.environment.temperature + 2) < (int16_t)G_Device_Ctrl.Heater.target_temp)
-        {
-
-            if (G_Device_Ctrl.Heater.run_status != 2)
-            {
-                G_Device_Ctrl.Heater.run_status = 2;
-                Heater_On(G_Device_Ctrl.Heater.target_temp);
-            }
-        }
-        else if (G_Device_Ctrl.environment.temperature >= (int16_t)G_Device_Ctrl.Heater.target_temp) //环境温度大于等于当前温度
-        {
-            if (G_Device_Ctrl.Heater.run_status == 2)
-            {
-                G_Device_Ctrl.Heater.run_status = 1;
-                Heater_Off(1);
-            }
-        }
-    }
-
-    if (G_Device_Ctrl.Inlet_Fan.heater_auto_en)
-    {
-        if (G_Device_Ctrl.Inlet_Fan.run_status != 2)
-        {
-            G_Device_Ctrl.Inlet_Fan.run_status = 2;
-            InWind_On(4);
-        }
-    }
-    else
-    {
-        if (G_Device_Ctrl.Inlet_Fan.anion_auto_en || G_Device_Ctrl.Inlet_Fan.plasma_auto_en)
-        {
-            if (G_Device_Ctrl.Inlet_Fan.run_status != 2)
-            {
-                G_Device_Ctrl.Inlet_Fan.run_status = 2;
-                InWind_On(1);
-            }
-        }
-        else
-        {
-            if (G_Device_Ctrl.Inlet_Fan.run_status == 1)
-            {
-                G_Device_Ctrl.Inlet_Fan.run_status = 0;
-                InWind_Off();
-            }
-        }
-    }
+    /* 屏端已不再承担任何定时/联动任务（计时统一由 STC 主控完成）：
+       - 排风/雾化/UVB 的运行与间隔自动轮换
+       - 紫外(UVC) 到时自动关闭
+       - 进风的加热强风联动、离子小风联动、加热关闭后 5 秒延时关风
+       屏端只保留各设备的开关接口：InWind_On()/InWind_Off() 及 DGUS 开关 VP。 */
 }
 
 void STC_ReporData_Procese(uint32_t addr)
 {
     uint16_t u16buf[48];
     int16_t tmp;
+
+    /* STC 复位通知（0x611D=1）：STC 重启后外设状态丢失，
+       屏端按现有设备状态重新下发指令，让外设恢复运行 */
+    if (addr == STC_RESET_VP)
+    {
+        read_dgus_vp(STC_RESET_VP, (uint8_t *)&u16buf[0], 1);
+        if (u16buf[0] == 1U)
+        {
+            stc_resync_pending = 1U;
+            stc_resync_step = 0U;
+        }
+        return;
+    }
+
     if (addr < 0x6000 || addr > 0x602F)
         return;
     read_dgus_vp(0x6000, (uint8_t *)&u16buf, 0x30);
@@ -2820,7 +2907,8 @@ void STC_ReporData_Procese(uint32_t addr)
         if (G_Device_Ctrl.Humidifier.liquid_status != (uint8_t)u16buf[0x1A])
         {
             G_Device_Ctrl.Humidifier.liquid_status = (uint8_t)u16buf[0x1A];
-            // Humidifier_Off(0);
+            Humidifier_Off(0); //缺水关闭雾化，退出自动轮换，加水后需重新手动开启
+            G_Device_Ctrl.Humidifier.run_status = 0;
         }
     }else{
         G_Device_Ctrl.Humidifier.liquid_status = (uint8_t)u16buf[0x1A];
@@ -2838,7 +2926,7 @@ void STC_ReporData_Procese(uint32_t addr)
         //如果两个传感器都异常就关闭加热
         if((G_Device_Ctrl.environment.GXHTC3_err_sta != 0) && (G_Device_Ctrl.environment.NTC_err_sta != 0)){
             if(G_Device_Ctrl.Heater.enable!=0){
-                Heater_Off(0);//关闭加热
+                Heater_Off();//关闭加热
             }
         }
     }
@@ -2971,7 +3059,7 @@ uint16_t Calculate_CRC16_Flash(unsigned char *updata, unsigned int len, unsigned
 
 
 
-#define CACHE_ADDR      0xF000
+#define CACHE_ADDR      0x2000
 #define NOR_FLASH_ADDR    0x08
 #define NOR_FLASH_R_CMD     0x5A
 #define NOR_FLASH_W_CMD     0xA5
@@ -2995,15 +3083,21 @@ void nor_flash_write(uint32_t addr, uint8_t* buf, uint16_t len)
 
     write_dgus_vp(NOR_FLASH_ADDR+0x1, &nor_flash_cmd[2], 3);
     write_dgus_vp(NOR_FLASH_ADDR, &nor_flash_cmd[0], 1);
-    EA=0;
-    while (1) {
-        read_dgus_vp(NOR_FLASH_ADDR, nor_flash_cmd, 2);
-        if (nor_flash_cmd[0] == 0) {
-            break;
+    // EA=0;
+    {
+        /* NOR 操作最长等待 2000ms：擦写被掉电打断/写保护/忙标志异常时
+           原 while(1) 会让整个主循环永久卡死（只能断电），故加超时退让 */
+        uint16_t wait_ms = 2000U;
+        while (wait_ms != 0U) {
+            read_dgus_vp(NOR_FLASH_ADDR, nor_flash_cmd, 1);
+            if (nor_flash_cmd[0] == 0) {
+                break;
+            }
+            delay_ms(1);
+            wait_ms--;
         }
-        delay_ms(1);
     }
-    EA=1;
+    // EA=1;
 }
 
 void nor_flash_read(uint32_t addr, uint8_t* buf, uint16_t len)
@@ -3021,15 +3115,21 @@ void nor_flash_read(uint32_t addr, uint8_t* buf, uint16_t len)
     write_dgus_vp(NOR_FLASH_ADDR+0x1, &nor_flash_cmd[2], 3);
     write_dgus_vp(NOR_FLASH_ADDR, &nor_flash_cmd[0], 1);
 
-    EA=0;
-    while (1) {
-        read_dgus_vp(NOR_FLASH_ADDR, nor_flash_cmd, 2);
-        if (nor_flash_cmd[0] == 0) {
-            break;
+    // EA=0;
+    {
+        /* NOR 操作最长等待 2000ms：擦写被掉电打断/写保护/忙标志异常时
+           原 while(1) 会让整个主循环永久卡死（只能断电），故加超时退让 */
+        uint16_t wait_ms = 2000U;
+        while (wait_ms != 0U) {
+            read_dgus_vp(NOR_FLASH_ADDR, nor_flash_cmd, 1);
+            if (nor_flash_cmd[0] == 0) {
+                break;
+            }
+            delay_ms(1);
+            wait_ms--;
         }
-        delay_ms(1);
     }
-    EA=1;
+    // EA=1;
     read_dgus_vp(CACHE_ADDR, buf, len);
 }
 
@@ -3041,7 +3141,6 @@ void Flash_DataInit(void)
     uint16_t err_sta = 0;
     uint16_t databuf[32], backdatabuf[32];
     uint16_t idxbuf[4],backidxbuf[4];
-    uint8_t u8buf[4];
     // memset(&G_Device_Ctrl, 0, 64);
     memset(&databuf, 0, 64);
     memset(&backdatabuf, 0, 64);
@@ -3574,22 +3673,113 @@ void Set_Temperature_Unit(uint16_t Unit)
 
 
 
+/*================ STC 开关状态回读校验（每 10s 一次，以 STC 上报为准）================
+  STC 通过 0x6000~0x6028 周期上报实际状态。
+  屏端下发开关后，若 10s 后屏端记录的状态与 STC 实测不一致（命令丢失、STC 故障保护
+  关断、STC 复位等），以 STC 的为准覆盖屏端状态与设置页图标。
+  保护：STC 未按新协议上报（版本号 0x6023 = 0）时不做校验，避免旧固件下误关设备。
+==================================================================================== */
+#define STC_STATE_CHECK_MS      10000UL
+
+static uint32_t stc_state_check_tick;
+
+/* 单个开关比对：不一致则以 STC 状态覆盖屏端状态 + 设置页图标 */
+static void StcApplySwitch(uint16_t ctrl_vp, uint16_t *pEnable, uint8_t stc_on)
+{
+    uint16_t want;
+
+    want = (stc_on != 0U) ? 1U : 0U;
+    if (*pEnable == want)
+    {
+        return;
+    }
+    *pEnable = want;
+    write_dgus_vp(ctrl_vp, (uint8_t *)pEnable, 1); //更新设置页图标开关状态
+}
+
+void StcStateCheckTask(void)
+{
+    uint32_t tick;
+    uint16_t buf[0x30];
+    uint8_t stc_on;
+
+    tick = GetSysTick();
+    if ((uint32_t)(tick - stc_state_check_tick) < STC_STATE_CHECK_MS)
+    {
+        return;
+    }
+    stc_state_check_tick = tick;
+
+    /* 0x6000~0x602F 全量状态 */
+    read_dgus_vp(0x6000, (uint8_t *)buf, 0x30);
+
+    /* STC 版本号为 0 说明尚未按新协议上报，跳过校验 */
+    // if (buf[0x23] == 0U)
+    // {
+    //     return;
+    // }
+
+    /* 5 个主功能只认 STC 的"功能状态"字（0x6024~0x6028），
+       不再叠加档位/设备状态：档位字可能保留记忆值，字段错位时也会把
+       不相干的设备误判为"开"（曾出现开负离子把 UVB 带亮） */
+    stc_on = (uint8_t)((buf[0x24] != 0U) ? 1U : 0U);
+    StcApplySwitch(HEATER_VP, &G_Device_Ctrl.Heater.enable, stc_on);
+
+    stc_on = (uint8_t)((buf[0x25] != 0U) ? 1U : 0U);
+    StcApplySwitch(MIST_VP, &G_Device_Ctrl.Humidifier.enable, stc_on);
+
+    stc_on = (uint8_t)((buf[0x26] != 0U) ? 1U : 0U);
+    StcApplySwitch(OUTWIND_VP, &G_Device_Ctrl.Exhaust.enable, stc_on);
+    if (stc_on == 0U)
+    {
+        G_Device_Ctrl.Exhaust.target_speed = 0U;
+        G_Device_Ctrl.Exhaust.running = FALSE;
+    }
+
+    stc_on = (uint8_t)((buf[0x27] != 0U) ? 1U : 0U);
+    StcApplySwitch(UVB_VP, &G_Device_Ctrl.UVB.enable, stc_on);
+    if (stc_on == 0U)
+    {
+        G_Device_Ctrl.UVB.target_brightness = 0U;
+        G_Device_Ctrl.UVB.running = FALSE;
+    }
+
+    stc_on = (uint8_t)((buf[0x28] != 0U) ? 1U : 0U);
+    StcApplySwitch(UVC_VP, &G_Device_Ctrl.UVC.enable, stc_on);
+
+    /* 以下设备没有"功能状态"字，使用各自的"状态"字（明确的 0/1） */
+    stc_on = (uint8_t)((buf[0x0D] != 0U) ? 1U : 0U);
+    StcApplySwitch(LIGHT_VP, &G_Device_Ctrl.Light.enable, stc_on);
+
+    /* 负离子 0x6017 */
+    stc_on = (uint8_t)((buf[0x17] != 0U) ? 1U : 0U);
+    StcApplySwitch(ANION_VP, &G_Device_Ctrl.Anion.enable, stc_on);
+
+    /* 等离子 0x6018 */
+    stc_on = (uint8_t)((buf[0x18] != 0U) ? 1U : 0U);
+    StcApplySwitch(PLASMA_VP, &G_Device_Ctrl.Plasma.enable, stc_on);
+
+    /* 进风：任一路档位非 0 视为开（0x6008 进风1档位 / 0x600B 进风2档位） */
+    stc_on = (uint8_t)(((buf[0x08] != 0U) || (buf[0x0B] != 0U)) ? 1U : 0U);
+    StcApplySwitch(INWIND_VP, &G_Device_Ctrl.Inlet_Fan.enable, stc_on);
+    if (stc_on != 0U)
+    {
+        G_Device_Ctrl.Inlet_Fan.speed = buf[0x08];
+        G_Device_Ctrl.Inlet_Fan.target_speed = buf[0x08];
+    }
+    else
+    {
+        G_Device_Ctrl.Inlet_Fan.speed = 0U;
+        G_Device_Ctrl.Inlet_Fan.target_speed = 0U;
+    }
+}
+
 void Mult_Task()
 {
-    uint8_t frame[10];
     AlarmCode_Updata();
     Updata_Vpdata_To_Report();
     PageFunction();
- //   AA BB 15 01 00 00 55 E8
-    frame[0] = 0xaa;
-    frame[1] = 0xbb;
-    frame[2] = 0x15;
-    frame[3] = 0x01;
-    frame[4] = 0x00;
-    frame[5] = 0x00;
-    frame[6] = 0x55;
-    frame[7] = 0xE8;
-    UartSendData(&Uart2,frame,8);
+    StcStateCheckTask();
 }
 
 

@@ -255,6 +255,40 @@ static void InterruptInit(void)
 }
 
 
+/* DGUS 核握手有界等待：正常一次握手在几十微秒内完成。
+   计数上限约 10ms，超时说明 OS 核异常/总线被长期占用，
+   必须放弃本次访问并复位 RAMMODE，否则主循环会永久卡死在这里。
+   （read/write_dgus_vp 是全局 UI、上报、云通讯的基础，一旦死等整机假死） */
+#define sysDGUS_WAIT_MAX    60000U
+
+uint8_t SysDgusWaitAck(void)
+{
+    uint16_t n = sysDGUS_WAIT_MAX;
+
+    while(!APP_ACK)
+    {
+        if(--n == 0U)
+        {
+            return 0U;
+        }
+    }
+    return 1U;
+}
+
+uint8_t SysDgusWaitEn(void)
+{
+    uint16_t n = sysDGUS_WAIT_MAX;
+
+    while(APP_EN)
+    {
+        if(--n == 0U)
+        {
+            return 0U;
+        }
+    }
+    return 1U;
+}
+
 void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
 {
 	uint32_t OS_addr = 0;
@@ -268,11 +302,11 @@ void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
     ADR_L=(uint8_t)OS_addr;
     ADR_INC=1;                 
     RAMMODE=0xAF;               
-	while(!APP_ACK);     
+	if(!SysDgusWaitAck()) { RAMMODE=0x00; return; }     
     if(OS_addr_offset)       
     {
         APP_EN=1;
-        while(APP_EN); 
+        if(!SysDgusWaitEn()) { RAMMODE=0x00; return; } 
         *buf++=DATA1;
         *buf++=DATA0;              
         len--;
@@ -282,7 +316,7 @@ void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
     while(OS_len--)
     {
         APP_EN=1;
-        while(APP_EN);      
+        if(!SysDgusWaitEn()) { RAMMODE=0x00; return; }      
         *buf++=DATA3;
         *buf++=DATA2;
         *buf++=DATA1;
@@ -291,7 +325,7 @@ void read_dgus_vp(uint32_t addr,uint8_t *buf,uint8_t len)
 	if(OS_len_offset)
 	{          
 		APP_EN=1;
-		while(APP_EN);      
+		if(!SysDgusWaitEn()) { RAMMODE=0x00; return; }      
 		*buf++=DATA3;
 		*buf++=DATA2;              
 	} 
@@ -310,14 +344,14 @@ void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len )
     ADR_L= ( unsigned char ) ( addr>>1 );
     ADR_INC=0x01;
     RAMMODE=0x8F;
-    while ( APP_ACK==0 );
+    if(!SysDgusWaitAck()) { RAMMODE=0x00; return; }
     if ( i && len>0 )
     {
         RAMMODE=0x83;
         DATA1=*p++;
         DATA0=*p++;
         APP_EN=1;
-        while ( APP_EN==1 );
+        if(!SysDgusWaitEn()) { RAMMODE=0x00; return; }
         len--;
     }
     RAMMODE=0x8F;
@@ -328,7 +362,7 @@ void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len )
         DATA1=*p++;
         DATA0=*p++;
         APP_EN=1;
-        while ( APP_EN==1 );
+        if(!SysDgusWaitEn()) { RAMMODE=0x00; return; }
         len=len-2;
     }
     if ( len )
@@ -337,7 +371,7 @@ void write_dgus_vp ( uint32_t  addr, uint8_t *buf, uint16_t len )
         DATA3=*p++;
         DATA2=*p++;
         APP_EN=1;
-        while ( APP_EN==1 );
+        if(!SysDgusWaitEn()) { RAMMODE=0x00; return; }
     }
     RAMMODE=0x00;
 
@@ -390,14 +424,29 @@ uint16_t ReadPageId(void)
 void SwitchPageById(uint16_t page_id)
 {
     uint16_t write_param[2];
-    write_param[0] = 0x5A01;
-	write_param[1] = page_id;
-	write_dgus_vp(sysDGUS_PIC_SET,(uint8_t *)&write_param[0],2);
-	while(write_param[0] & 0xFF00)
-	{
-		delay_us(100);
-		read_dgus_vp(sysDGUS_PIC_SET,(uint8_t*)&write_param[0],1);
-	}
+    /* 切页请求最坏 200ms 内必须有结果，否则放弃：
+       页号不存在、OS 核忙于动画/批量图标时该标志可能长期不清零。
+       失败后重试一次，避免偶发丢请求导致"点按键没反应" */
+    uint16_t retry;
+    uint8_t tries;
+
+    for (tries = 0U; tries < 2U; tries++)
+    {
+        write_param[0] = 0x5A01;
+        write_param[1] = page_id;
+        write_dgus_vp(sysDGUS_PIC_SET, (uint8_t *)&write_param[0], 2);
+        retry = 2000U;
+        while ((write_param[0] & 0xFF00) && (retry-- != 0U))
+        {
+            delay_us(100);
+            read_dgus_vp(sysDGUS_PIC_SET, (uint8_t *)&write_param[0], 1);
+        }
+        if ((write_param[0] & 0xFF00) == 0U)
+        {
+            break; /* DGUS 已受理 */
+        }
+        delay_ms(2);
+    }
 }
 
 
@@ -640,10 +689,16 @@ void T5lNorFlashRW(uint8_t RWFlag,uint8_t flash_block,uint16_t flash_addr,
     write_dgus_vp(sysDGUS_FLASH_RW_CMD, write_param, 1);
     /* @warning 建议关闭所有中断，写flash需要200ms左右，防止进入定时器中断导致数据错误*/
     SysEnterCritical();
-    while (write_param[0])
     {
-        delay_ms(10);
-        read_dgus_vp(sysDGUS_FLASH_RW_CMD, write_param, 1);
+        /* 关中断期间死等最危险：flash 忙标志异常时会永久卡死且中断全关，
+           故限制最长 2s，超时放弃本次读写 */
+        uint16_t wait_ms = 2000U;
+        while ((write_param[0] != 0U) && (wait_ms != 0U))
+        {
+            delay_ms(10);
+            read_dgus_vp(sysDGUS_FLASH_RW_CMD, write_param, 1);
+            wait_ms -= 10U;
+        }
     }
     SysExitCritical();
     if(RWFlag == flashREAD_FLAG) // 读操作

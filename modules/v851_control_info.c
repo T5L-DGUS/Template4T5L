@@ -585,7 +585,7 @@ static void V851ControlInfoApplySwitch(uint8_t struct_type,
         case V851_TLV_STRUCT_CLIMATE:
             setting = V851ControlInfoReadBe16(&record[2]);
             if(enabled != 0U) Heater_On((int16_t)setting);
-            else Heater_Off(0U);
+            else Heater_Off();
             break;
 
         case V851_TLV_STRUCT_HUMIDIFIER:

@@ -3,6 +3,7 @@
 #if v851PROTOCOL_ENABLED
 
 #include "v851_protocol.h"
+#include "timer.h"
 
 #include <string.h>
 
@@ -41,6 +42,27 @@ static V851WifiPageConfig v851_wifi_page;
 static uint8_t v851_wifi_page_offset;
 static uint8_t xdata v851_wifi_clear_buffer
     [V851_WIFI_SSID_MAX * V851_WIFI_PAGE_SIZE];
+
+/* 连接中动画状态：1=动画显示中（此期间忽略重复的连接按键） */
+static uint8_t v851_wifi_connect_anim;
+static uint32_t v851_wifi_connect_anim_tick;
+
+static void V851WifiConnectAnimStart(void)
+{
+    uint16_t enable = 1U;
+
+    write_dgus_vp(V851_WIFI_CONNECT_ANIM_VP, (uint8_t *)&enable, 1U);
+    v851_wifi_connect_anim_tick = GetSysTick();
+    v851_wifi_connect_anim = 1U;
+}
+
+static void V851WifiConnectAnimStop(void)
+{
+    uint16_t disable = 0U;
+
+    write_dgus_vp(V851_WIFI_CONNECT_ANIM_VP, (uint8_t *)&disable, 1U);
+    v851_wifi_connect_anim = 0U;
+}
 
 static void V851WifiSwitchIfEnabled(uint8_t flag, uint8_t page)
 {
@@ -150,9 +172,14 @@ static void V851WifiHandleKey(uint16_t key)
     }
     else if(key == V851_WIFI_KEY_CONNECT)
     {
+        /* 动画显示期间不响应连接按键，等 25s 动画结束或超时关闭后再允许 */
+        if(v851_wifi_connect_anim != 0U)
+        {
+            return;
+        }
         V851WifiRequestConnect();
-        V851WifiSwitchIfEnabled(v851_wifi_page.transit_detail_flag,
-                                v851_wifi_page.transit_detail_page);
+        V851WifiConnectAnimStart();
+        SwitchPageById(V851_WIFI_PAGE_CONNECT_ANIM);
     }
     else if(key == V851_WIFI_KEY_SCAN)
     {
@@ -195,7 +222,6 @@ void V851WifiClearCredentials(void)
 
 void V851WifiInit(void)
 {
-    uint8_t page_bytes[14];
 //
 //    FlashToDgus(flashMAIN_BLOCK_ORDER,V851_WIFI_PAGE_CONFIG_ADDR,V851_WIFI_PAGE_CONFIG_ADDR,8);
     memset(&v851_wifi_page, 0, sizeof(v851_wifi_page));
@@ -205,12 +231,15 @@ void V851WifiInit(void)
 //    read_dgus_vp(V851_WIFI_LIST_CONFIG_ADDR,
 //                 (uint8_t *)&v851_wifi_page.wifi_start_addr, 1U);
 	v851_wifi_page.scan_flag=0x5A;
-    v851_wifi_page.scan_page=41;
+    v851_wifi_page.scan_page=V851_WIFI_PAGE_SCAN;
     v851_wifi_page.detail_flag=0x5A;
-    v851_wifi_page.detail_page=41;
+    v851_wifi_page.detail_page=V851_WIFI_PAGE_SCAN;
 	
     v851_wifi_page.wifi_start_addr=0x1900;
     v851_wifi_page_offset = 0U;
+    /* 上电清掉可能残留的连接中动画 */
+    v851_wifi_connect_anim_tick = 0UL;
+    V851WifiConnectAnimStop();
 }
 
 void V851WifiTask(void)
@@ -219,6 +248,14 @@ void V851WifiTask(void)
     const uint16_t zero = 0U;
 
     key = 0U;
+    /* 连接动画固定显示 25s，到点关闭动画并跳回 WiFi 扫描页 */
+    if((v851_wifi_connect_anim != 0U) &&
+       ((uint32_t)(GetSysTick() - v851_wifi_connect_anim_tick) >=
+        V851_WIFI_CONNECT_ANIM_MS))
+    {
+        V851WifiConnectAnimStop();
+        SwitchPageById(V851_WIFI_PAGE_SCAN);
+    }
     read_dgus_vp(V851_WIFI_KEY_ADDR, (uint8_t *)&key, 1U);
     if(key != 0U)
     {

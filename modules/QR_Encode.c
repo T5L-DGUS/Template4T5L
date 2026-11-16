@@ -475,13 +475,13 @@ void qr_writeDgusiiVp(unsigned long addr, unsigned char *buf, unsigned int len)
 	ADR_L = (unsigned char)OS_addr;
 	ADR_INC = 0x01; //DGUS  OS存储器地址在读写后自动加1
 	RAMMODE = 0x83;
-	while (!APP_ACK); //等待
+	if (!SysDgusWaitAck()) { RAMMODE = 0x00; return; } //等待
 	if (OS_addr_offset)
 	{
 		DATA1 = *buf++;
 		DATA0 = *buf++;
 		APP_EN = 1;
-		while(APP_EN);
+		if (!SysDgusWaitEn()) { RAMMODE = 0x00; return; }
 		len--;
 	}
 	OS_len = len >> 1;
@@ -494,7 +494,7 @@ void qr_writeDgusiiVp(unsigned long addr, unsigned char *buf, unsigned int len)
 		DATA1 = *buf++;
 		DATA0 = *buf++;
 		APP_EN = 1;
-		while (APP_EN);
+		if (!SysDgusWaitEn()) { RAMMODE = 0x00; return; }
 	}
 	if (OS_len_offset)
 	{
@@ -502,7 +502,7 @@ void qr_writeDgusiiVp(unsigned long addr, unsigned char *buf, unsigned int len)
 		DATA3 = *buf++;
 		DATA2 = *buf++;
 		APP_EN = 1;
-		while (APP_EN);
+		if (!SysDgusWaitEn()) { RAMMODE = 0x00; return; }
 	}
 	RAMMODE = 0x00; //读写完成后RAMMODE必须置零
 }

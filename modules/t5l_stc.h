@@ -79,25 +79,32 @@ typedef enum
 
 
 #define OUTWIND_AUTO_RUN_TIME_SEC 600    //排风运行时间秒600s（10-15min）
-//////////////////////////////////////////////////
-#define OUTWIND_CMDWORD 0x6100
-#define INWIND_CMDWORD 0x6101
-#define INWIND2_CMDWORD 0x6102
-#define LIGHT_CMDWORD 0x6103
-#define IR_CMDWORD 0x6104
-#define UVC_CMDWORD 0x6105
-#define UVB_CMDWORD 0x6106
-#define HEATER_CMDWORD 0x6107
-// #define OUTWIND_CMDWORD 0x6108
-#define ANION_CMDWORD 0x6109
-#define PLASMA_CMDWORD 0x610A
-#define HUMIDIFIER_CMDWORD 0x610B
-#define LOCK_CMDWORD 0x610C
+/*================ 下位机(STC)指令地址表（依据 Docs/功能.docx，每项 2 字节）================
+   0x6110 加热功能(0/1)     0x6111 加热设定温度(℃)
+   0x6112 雾化功能(0/1)     0x6113 雾化运行时间(min)  0x6114 雾化间隔时间(min)
+   0x6115 排风功能(0/1)     0x6116 排风档位(0~6)      0x6117 排风间隔时间(min)
+   0x6118 UVB功能(0/1)      0x6119 UVB档位(0~4)       0x611A UVB间隔时间(min)
+   0x611B 紫外消杀功能(0/1) 0x611C 紫外消杀时间(min)
+   0x611D STC复位通知(STC→T5L，1=已复位，屏端据此重新同步)
+   文档未定义新地址的功能沿用原 0x6101~0x610F
+========================================================================================= */
+#define HEATER_CMDWORD      0x6110U   /* +0 开关，+1 设定温度 */
+#define HUMIDIFIER_CMDWORD  0x6112U   /* +0 开关，+1 运行min，+2 间隔min */
+#define OUTWIND_CMDWORD     0x6115U   /* +0 开关，+1 档位，+2 间隔min */
+#define UVB_CMDWORD         0x6118U   /* +0 开关，+1 档位，+2 间隔min */
+#define UVC_CMDWORD         0x611BU   /* +0 开关，+1 消杀min */
+#define STC_RESET_VP        0x611DU   /* STC→T5L 复位通知 */
 
-
-#define SM_FAN_CMDWORD 0x610D
-#define MIC_LED_CMDWORD 0x610E
-#define CAMERA_LED_CMDWORD 0x610F
+#define INWIND_CMDWORD      0x6101U
+#define INWIND2_CMDWORD     0x6102U
+#define LIGHT_CMDWORD       0x6103U
+#define IR_CMDWORD          0x6104U
+#define ANION_CMDWORD       0x6109U
+#define PLASMA_CMDWORD      0x610AU
+#define LOCK_CMDWORD        0x610CU
+#define SM_FAN_CMDWORD      0x610DU
+#define MIC_LED_CMDWORD     0x610EU
+#define CAMERA_LED_CMDWORD  0x610FU
 //////////////////////////////////////////////////////////////
 typedef enum
 {
@@ -160,12 +167,11 @@ typedef struct
     uint16_t target_speed;      // 风速 1~6档
     uint32_t interval_time_sec; // 定时时长（秒）
 
-    uint8_t running_min;       // 单次自动通风时长 固定10分钟（参数固化，可保留配置位）
-    uint32_t running_time_sec; // 定时时长（秒）
+    uint32_t running_time_sec; // 定时时长（秒）10分钟
 
     uint8_t err_sta;  //0正常  1堵转
     uint8_t auto_vent_en; //自动通风使能 0关闭  1开启
-    uint8_t run_status;   // 1关闭运行 2开启运行
+    uint8_t run_status;   //运行开关  1关闭 2开启
     uint8_t running;
 } St_Exhaust;
 
@@ -190,11 +196,10 @@ typedef struct
 {
     uint16_t enable;             // 加热总开关0关1开
     uint16_t set_temp;           // 设置温度 20~35 ℃
-    uint16_t target_temp;           // 目标温度 20~35 ℃
-    int16_t real_temp;          // 传感器实时温度
+    uint16_t target_temp;        // 目标温度 20~35 ℃
+    int16_t real_temp;           // 传感器实时温度
 
-    uint8_t err_sta;  //0正常  1传感器 或加热棒异常
-    uint8_t aotu_heater_en;
+    uint8_t err_sta;    // 0正常  1传感器 或加热棒异常
     uint8_t run_status; // 1关闭运行 2开启运行
     uint8_t running;
 } St_Heater;
@@ -379,7 +384,7 @@ void Start_Once_SaveData();
 /* NOR flash 读（t5l_stc.c 内实现）；供 QR_Encode.c 读取二维码配置区使用。
    addr=字地址，len=字长度（len必须为偶数），buf 需容纳 len*2 字节 */
 void nor_flash_read(uint32_t addr, uint8_t* buf, uint16_t len);
-void T5l_Stc_UartRxProcess(uint16_t addr);
+void T5l_Stc_UartRxProcess(uint16_t addr, uint8_t result);
 void STC_ReporData_Procese(uint32_t addr);
 uint8_t check_passwd_format(uint8_t *u8buf );
 
@@ -389,7 +394,7 @@ void Exhaust_Off(uint8_t auto_flag);
 void InWind_On(uint16_t speed);
 void InWind_Off();
 void Heater_On(int16_t target_tmp);
-void Heater_Off(uint8_t auto_flag);
+void Heater_Off(void);
 void Light_On(uint16_t target_brightness);
 void Light_Off();
 void UVC_On();
@@ -398,6 +403,9 @@ void UVB_On(uint16_t target_brightness);
 void UVB_Off(uint8_t auto_flag);
 void Humidifier_On();
 void Humidifier_Off(uint8_t auto_flag);
+
+void Send_Cmd_Ctrl(uint16_t cmdword, uint16_t value);
+void Send_Cmd_Block(uint16_t cmdword, uint16_t *words, uint8_t count);
 // void Anion_On(void);
 // void Anion_Off(void);
 // void Plasma_On(void);
