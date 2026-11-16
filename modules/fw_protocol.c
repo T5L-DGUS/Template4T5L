@@ -2,7 +2,7 @@
 #include "fw_test_platform.h"
 #else
 /* Keep the UI state machine within the existing T5L code-memory banks. */
-#pragma OPTIMIZE(8,SIZE)
+#pragma OPTIMIZE(9,SIZE)
 #include "fw_protocol.h"
 #include "modbus.h"
 #include "timer.h"
@@ -40,6 +40,10 @@ static uint16_t xdata set_temperature;
 static uint32_t xdata set_temperature_at;
 static uint8_t xdata set_temperature_valid;
 static uint16_t xdata state_page_pending, pause_return_page;
+static uint8_t xdata popup_active, popup_pending, popup_seen, popup_alarm_last;
+static uint8_t xdata run_completed, run_requested;
+static uint32_t xdata run_requested_at;
+static uint16_t xdata warning_ack41, warning_ack42;
 static void LocalDraft(void);
 static void LocalCommit(void);
 static void LocalTask(uint32_t now);
@@ -101,6 +105,10 @@ static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify);
 static void UiNavigate(uint16_t target);
 static void StateTask(uint32_t now);
 static void AlarmClearTask(void);
+static void PopupTask(uint32_t now);
+static void PopupClose(void);
+static uint8_t PopupPage(uint16_t p);
+static void PopupRequest(uint8_t type);
 static uint8_t UiAdvanced(uint16_t p) { return p==27 || p==FW_UI_ADV2_PAGE; }
 
 static uint32_t FwNow(void)
@@ -230,12 +238,12 @@ static void UiTwoDigits(uint16_t vp,uint16_t value)
 /* FW6/FW30 pages are the running view; keep FW16 unchanged on the bus. */
 static uint16_t UiRunPage(void)
 {
-    return !offline && Valid(30) && (int16_t)FwGet(FW_MIRROR_VP+30)<-30?30:6;
+    return run_completed || (!offline && DisplayValid(30) && (int16_t)FwGet(FW_MIRROR_VP+30)<-30)?30:6;
 }
 static void UiRunPageTask(void)
 {
     uint16_t p=ReadPageId(), target;
-    if((fw_page!=6 && fw_page!=30) || (p!=6 && p!=30)) return;
+    if((p!=6 && p!=30) || offline || !Valid(39) || FwGet(FW_MIRROR_VP+39)!=3) return;
     /* An in-flight write invalidates control data but must not flicker the view. */
     if(!offline && !Valid(30)) return;
     target=UiRunPage();
@@ -416,7 +424,7 @@ static uint8_t UiCommandReason(uint16_t key)
     if(key==4 || key==50 || key==3 || key==38) {
         if(offline || !Valid(39)) return 1;
         mode=FwGet(FW_MIRROR_VP+39);
-        if(key==38) return mode==3?0:6;
+        if(key==38) return mode==2 || mode==3 || mode==4 || mode==6?0:6;
         if(!Valid(41)) return 1;
         if(FwGet(FW_MIRROR_VP+41)) return 3;
         if(key==3) return mode==0 || mode==3?0:6;
@@ -431,6 +439,8 @@ static uint8_t UiCommandReason(uint16_t key)
     if(offline || !Valid(42)) return 1;
     if(FwGet(FW_MIRROR_VP+42)&1) return 5;
     if(key!=40 && key!=51) return 0;
+    if(!Valid(82) || FwGet(FW_MIRROR_VP+82)!=1) return Valid(82)?6:1;
+    if(!Valid(39) || FwGet(FW_MIRROR_VP+39)!=0) return Valid(39)?6:1;
     c=UiCondition(0); if(c!=1) return c==2?1:2;
     c=UiCondition(1); if(c!=1) return c==2?1:3;
     if(key==51) { c=UiCondition(2); if(c!=1) return c==2?1:4; }
@@ -454,8 +464,10 @@ static uint8_t UiHomeAction(uint16_t e, uint16_t *target)
         }
         if(mode==2) { *target=12; return 1; }
         if(e==0x0126) {
+            if(mode==3) { *target=UiRunPage(); return 1; }
             if(mode==4) { *target=40; return 1; }
             if(mode==6) { *target=4; return 1; }
+            return 0;
         }
     }
     if((e>>8)==1) return !UiCommandReason(e&255);
@@ -563,6 +575,7 @@ static uint8_t PassCommit(void)
 }
 static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
 {
+    PopupClose();
     home_event=home_target=0;
     pass_origin=ReadPageId(); if(pass_origin==0 || pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=1;
     if(mode==1) { target=42; pass_origin=1; }
@@ -575,6 +588,15 @@ static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
 }
 static void UiNavigate(uint16_t target)
 {
+    uint8_t reg, position, type=PopupPage(target);
+    if(type) {
+        PopupRequest(type);
+        if(ReadPageId()!=0) return;
+        target=42;
+    }
+    if(target==19 && (warning_ack42&1)) target=42;
+    if(UiWarningAlarm(target,&reg,&position) && target!=17 &&
+       ((reg==41?warning_ack41:warning_ack42)&(1U<<position))) target=42;
     if(target==17 && power_hidden) target=42;
     if(lid_deferred && (target==19 || target==8)) target=40;
     if(UiAdvanced(target) && !admin_authorized) {
@@ -588,8 +610,10 @@ static void UiNavigate(uint16_t target)
     if(target==1) target=42;
     if(target==42 && pass_enabled && !pass_authorized) {
         if(ReadPageId()==FW_UI_PASS_PAGE && pass_mode==1) return;
+        if(ReadPageId()!=1 && ReadPageId()!=42) { PassOpen(1,42,1); return; }
         target=1;
     }
+    if(target==11 || target==13 || (target>=15 && target<=20) || target==22 || target==8) PopupClose();
     if(target==6 || target==30) target=UiRunPage();
     pass_mode=0; pass_input=pass_first=0; pass_length=0; PassMask();
     if(ReadPageId()!=target) SwitchPageById(target);
@@ -654,6 +678,7 @@ static void PassTouchTask(uint16_t touch,uint32_t now)
             SwitchPageById(1); p=1;
         }
     }
+    if(popup_active) return;
     if(pass_touch_guard) {
         FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
         if(pass_touch_down) pass_guard_at=now;
@@ -742,12 +767,22 @@ static void StateTask(uint32_t now)
     if(!Valid(39) || !Valid(30) || !Valid(41) || !Valid(42)) return;
     if(refresh_active || refresh_pending) return;
     mode=FwGet(FW_MIRROR_VP+39); lid=(uint8_t)(FwGet(FW_MIRROR_VP+42)&1);
+    warning_ack41&=FwGet(FW_MIRROR_VP+41);
+    warning_ack42&=FwGet(FW_MIRROR_VP+42);
+    if(mode!=3) run_completed=0;
+    if(run_requested && (mode==3 || now-run_requested_at>=5000UL)) {
+        run_requested=0;
+        if(mode==3 && p==42) UiNavigate(UiRunPage());
+    }
     if(!(FwGet(FW_MIRROR_VP+41)&0x4000)) power_hidden=0;
     else if(!power_observed && fw_page==17 && !power_hidden) state_page_pending=17;
     power_observed=(FwGet(FW_MIRROR_VP+41)&0x4000)!=0;
     UiSet(FW_UI_POWER_STATE,power_hidden?((int16_t)FwGet(FW_MIRROR_VP+30)<350?2:1):0);
-    if(mode==5 && !defrost_mode) { defrost_state=1; defrost_at=now; }
+    if(mode==5 && !defrost_mode) {
+        defrost_state=1; defrost_at=now; popup_seen&=(uint8_t)~1U; PopupRequest(1);
+    }
     if(defrost_state==1 && (mode!=5 || now-defrost_at>=60000UL)) defrost_state=2;
+    if(mode!=0 && mode!=5) defrost_state=0;
     defrost_mode=mode==5;
     UiSet(FW_UI_DEFROST_STATE,defrost_state);
     if((p==8 || state_page_pending==8) && mode==4 && pause_seen!=1) {
@@ -773,6 +808,10 @@ static void UiDisplay(void)
     uint16_t result=FwGet(FW_UI_RESULT_VP);
     uint8_t reason=UiCommandReason(UiLogicalPage()==3?51:40);
     for(i=0;i<3;i++) UiSet(FW_UI_CHECK_VP+i,UiCondition(i));
+    UiSet(FW_UI_LEVEL_ICON,offline || !DisplayValid(37)?2:(FwGet(FW_MIRROR_VP+37)>0?1:0));
+    UiSet(FW_UI_REGEN_STAGE,offline || !DisplayValid(39)?0:
+        (FwGet(FW_MIRROR_VP+39)==6?1:(FwGet(FW_MIRROR_VP+39)==3?2:0)));
+    UiSet(FW_UI_SLEEP_HOT,!offline && DisplayValid(30) && (int16_t)FwGet(FW_MIRROR_VP+30)>450);
     UiSet(FW_UI_LID_VP,!lid_deferred && !offline && DisplayValid(42) && (FwGet(FW_MIRROR_VP+42)&1));
     UiSet(FW_UI_START_VP,!reason);
     UiSet(FW_UI_REASON_VP,reason);
@@ -815,6 +854,7 @@ static void UiDisplay(void)
 }
 static void UiAfterReply(uint16_t address, uint16_t value)
 {
+    uint8_t old_popup;
     if(address==5) { set_temperature=value; set_temperature_at=FwNow(); set_temperature_valid=1; }
     if(editing) {
         if(!(edit_valid[address>>3] & (1U<<(address&7))) || FwGet(FW_EDIT_VP+address)==edit_base[address])
@@ -824,6 +864,11 @@ static void UiAfterReply(uint16_t address, uint16_t value)
     }
     if(address==16 && (value==1 || value==42)) operation_page=value;
     if(address==16 && value!=fw_page) {
+        old_popup=PopupPage(fw_page);
+        if(old_popup>=2 && !(popup_alarm_last&(1U<<(old_popup-1))))
+            popup_seen&=(uint8_t)~(1U<<(old_popup-1));
+        if(value==30) run_completed=1;
+        else if(!PopupPage(value)) run_completed=0;
         fw_page=value;
         /* A controller page change supersedes a queued screen action. */
         if(ui_write && command==3 && (nav_target || start_submit_page)) {
@@ -922,9 +967,13 @@ static void FwFinish(uint16_t error)
         if(ui_write) FwSet(FW_UI_RESULT_VP,3);
         ui_write=0; nav_target=0; warning_submit_page=0;
     } else if(command == 6) {
+        if(request_address==14 && request_value==4) {
+            run_completed=0; run_requested=1; run_requested_at=FwNow();
+        }
         if(request_address==14 && pause_action==2) clean_next=!clean_next;
         if(request_address==14 && request_value==50 && defrost_mode) {
             defrost_state=1; defrost_at=FwNow(); UiSet(FW_UI_DEFROST_STATE,1);
+            popup_seen&=(uint8_t)~1U; PopupRequest(1);
         }
         pause_action=0; pause_return_page=0;
         /* A setting can affect other values: restart from the first range. */
@@ -1067,6 +1116,11 @@ void FwProtocolInit(void)
     home_event=home_target=0;
     pause_seen=clean_next=pause_action=lid_deferred=power_hidden=power_observed=defrost_state=defrost_mode=0;
     state_page_pending=pause_return_page=0; defrost_at=FwNow();
+    popup_active=popup_pending=popup_seen=popup_alarm_last=0;
+    run_completed=run_requested=0; run_requested_at=0;
+    warning_ack41=warning_ack42=0;
+    FwSet(0x00E8,0);
+    for(i=FW_UI_POPUP_TYPE;i<FW_UI_POPUP_TIME_TEXT+4;i++) FwSet(i,0);
     alarm_clear_pending=alarm_clear_running=0; alarm_text_index=255;
     alarm_seen[0]=alarm_seen[1]=0; UiText(FW_UI_ALARM_TEXT_VP,"",32);
     for(i=FW_UI_PAUSE_STATE;i<=FW_UI_POWER_STATE;i++) FwSet(i,0);
@@ -1079,6 +1133,66 @@ void FwProtocolInit(void)
     PassInit(); LocalInit();
     if(pass_enabled) UiNavigate(42);
     UiDisplay();
+}
+
+/* A page overlay never changes PIC_NOW or acknowledges a machine alarm. */
+static uint8_t PopupPage(uint16_t p)
+{
+    return p==5?1:(p==10?2:(p==43?3:(p==21?4:0)));
+}
+static void PopupRequest(uint8_t type)
+{
+    uint8_t mask=(uint8_t)(1U<<(type-1));
+    if(!(popup_seen&mask)) { popup_pending|=mask; popup_seen|=mask; }
+}
+static void PopupClose(void)
+{
+    if(popup_active) popup_pending|=(uint8_t)(1U<<(popup_active-1));
+    popup_active=0;
+    UiSet(0x00E8,0); UiSet(FW_UI_POPUP_TYPE,0);
+    UiText(FW_UI_POPUP_TIME_TEXT,"",4);
+}
+static void PopupTask(uint32_t now)
+{
+    uint16_t alarm, p=ReadPageId(), seconds=0;
+    uint8_t active_bits, cleared, type, mask;
+    if(!offline && Valid(42) && !refresh_active && !refresh_pending) {
+        alarm=FwGet(FW_MIRROR_VP+42);
+        active_bits=(alarm&0x4000?2:0)|(alarm&0x1000?4:0)|(alarm&0x2000?8:0);
+        cleared=popup_alarm_last&~active_bits;
+        if(popup_active && (cleared&(1U<<(popup_active-1)))) PopupClose();
+        popup_seen&=~cleared; popup_pending&=~cleared;
+        popup_alarm_last=active_bits;
+        for(type=2;type<=4;type++) if(active_bits&(1U<<(type-1))) PopupRequest(type);
+    }
+    if(defrost_state==1 && now-defrost_at>=60000UL) {
+        defrost_state=2; UiSet(FW_UI_DEFROST_STATE,2);
+    }
+    if(defrost_state==1) {
+        seconds=now-defrost_at>=60000UL?0:(uint16_t)((60000UL-(now-defrost_at)+999UL)/1000UL);
+    } else if(defrost_state==2 || (!offline && Valid(39) && !refresh_active && !refresh_pending)) {
+        if(popup_active==1) PopupClose();
+        popup_pending&=(uint8_t)~1U;
+    }
+    UiSet(FW_UI_POPUP_SECONDS,seconds);
+    /* Safety pages and password/number entry take priority over queued hints. */
+    if(p==0 || p==8 || p==11 || p==13 || (p>=15 && p<=20) || p==22 ||
+       p==119 || p==FW_UI_PASS_PAGE) { if(popup_active) PopupClose(); return; }
+    if(popup_active==1 && (popup_pending&14)) PopupClose();
+    if(!popup_active && !offline && !refresh_active && !refresh_pending && !pass_touch_guard) {
+        for(type=4;type;type--) {
+            mask=(uint8_t)(1U<<(type-1));
+            if(popup_pending&mask) {
+                popup_pending&=~mask; popup_active=type;
+                FwSet(FW_UI_EVENT_VP,0); FwSet(0x0600,0);
+                UiSet(FW_UI_POPUP_TYPE,type);
+                FwSet(0x00E9,FW_UI_POPUP_PAGE); FwSet(0x00E8,0x5A01);
+                break;
+            }
+        }
+    }
+    if(popup_active==1) UiNumber(FW_UI_POPUP_TIME_TEXT,seconds,0,0,1,4);
+    else UiText(FW_UI_POPUP_TIME_TEXT,"",4);
 }
 
 /* Display one defined alarm at a time. Unknown bits never acquire a command. */
@@ -1196,6 +1310,14 @@ static void UiEvent(void)
     uint8_t i,a,n,good;
     if(!e) return;
     FwSet(FW_UI_EVENT_VP,0);
+    if(popup_active) {
+        if(e==FW_UI_POPUP_ACK) {
+            i=(uint8_t)(1U<<(popup_active-1)); PopupClose(); popup_pending&=~i;
+            /* Release the confirming finger before accepting underlying keys. */
+            pass_touch_guard=1; pass_guard_at=FwNow();
+        }
+        return;
+    }
     if(p==1 || pass_touch_guard) return;
     if((e>>8)==5) { PassEvent(e); return; }
     if(p==FW_UI_PASS_PAGE) return;
@@ -1239,8 +1361,12 @@ static void UiEvent(void)
         if(e==0x0405 && p==FW_UI_BOARD2_PAGE) SwitchPageById(31);
         return;
     }
-    if(p==17 && (e==0x0303 || e==0x0200)) {
-        power_hidden=1; state_page_pending=0; UiNavigate(42);
+    if((e==0x0303 || e==0x0200) && (UiWarningAlarm(p,&a,&i) || p==19)) {
+        if(p==17) power_hidden=1;
+        else if(p==19) warning_ack42|=1;
+        else if(a==41) warning_ack41|=(1U<<i);
+        else warning_ack42|=(1U<<i);
+        state_page_pending=0; UiNavigate(42);
         if(!offline && Valid(16) && !ui_write && !save_count && command!=6 && !FwGet(FW_WRITE_TRIGGER_VP)) {
             nav_target=42; force_page_write=1; UiSubmit(16,42);
         }
@@ -1329,10 +1455,6 @@ static void UiEvent(void)
             if(p==2) local_save=save_count?1:2;
             FwSet(FW_UI_RESULT_VP,save_count?1:2);
         }
-    } else if(e==0x0303) {
-        n=UiWarningAlarm(p,&a,&i);
-        if(n && Valid(a) && (FwGet(FW_MIRROR_VP+a)&(1U<<i))) { UiSubmit(14,n); warning_submit_page=p; }
-        else FwSet(FW_UI_RESULT_VP,3);
     } else if(e==0x0302) {
         if(alarm_clear_running) return;
         /* Build a finite batch; each shared command is sent at most once. */
@@ -1371,6 +1493,7 @@ void FwProtocolTask(void)
     PassTouchTask(touch,now);
     UiRunPageTask();
     StateTask(now);
+    PopupTask(now);
 #if sysADVERTISE_MODE_ENABLED
     R11VideoTouchTask(touch);
 #endif

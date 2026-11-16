@@ -12,6 +12,12 @@
 #include "timer.h"
 #include <string.h>
 
+/* Private scheduler storage: defining this in sys.h allocated a separate,
+ * unused copy in every translation unit on the C51 toolchain. */
+static SysTask SysTasks[sysMAX_TASK_NUM];
+static PageState page_states[dgusMAX_MONITORED_PAGES] = UINT16_PORT_MAX;
+static uint8_t SysTaskCount = 0;
+
 #if sysBEAUTY_MODE_ENABLED
 #include "r11_common.h"
 #include "r11_netskinAnalyze.h"
