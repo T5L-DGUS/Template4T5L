@@ -114,6 +114,7 @@ void R11ChangePictureLocate(uint16_t x_point,uint16_t y_point,uint16_t high,uint
     if(big_small_flag == 0x00 || big_small_flag == 0x01)
     {
         Big_Small_Flag = big_small_flag;
+        T5lSendUartDataToR11(cmdMP4_IMG_SET, NULL);
     }else
     {
         __NOP();
@@ -242,6 +243,7 @@ void T5lSendUartDataToR11( uint8_t cmd, uint8_t *buf)
             r11_buf[3] = 0x01;
             break;
         case cmdMP4_STOP:
+        case cmdMP4_IMG_SET:
             append_crc = 0;
             r11_buf[2] = 0x00;
             r11_buf[3] = 0x07;
@@ -675,15 +677,33 @@ void R11VideoValueHandle(uint16_t dgus_value)
     }else if(dgus_value == keyMP4_1FILE || dgus_value == keyMP4_2FILE || dgus_value == keyMP4_3FILE || dgus_value == keyMP4_4FILE || dgus_value == keyMP4_5FILE)
     {
         r11_send_buf[0] = (uint8_t)(dgus_value - keyMP4_1FILE);
+        /* 按键对应屏幕当前显示的文件名，不依赖可能尚未同步的列表数量缓存。 */
+        read_dgus_vp(MP4_FILENAME_VP_LIST1 + r11_send_buf[0] * (MAX_MP3_NAME_LEN >> 1),
+                     mp4_name[r11_send_buf[0]], MAX_MP3_NAME_LEN >> 1);
+        for(i = 0; i < MAX_MP3_NAME_LEN; i++)
+        {
+            if(mp4_name[r11_send_buf[0]][i] == 0x00 || mp4_name[r11_send_buf[0]][i] == 0xff)
+            {
+                break;
+            }
+        }
+        mp4_name_len[r11_send_buf[0]] = i;
+        if(i == 0)
+        {
+            return;
+        }
+        r11_player.serial = r11_send_buf[0];
+        if(r11_player.now_play_page == 0)
+        {
+            r11_player.now_play_page = 1;
+        }
         /*先将当前播放的标白，之后将当前播放改为点击的，再将点击的标红*/
         write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_white,1);
         r11_player.now_play_serial = r11_send_buf[0] + (r11_player.now_play_page-1)*5;
         write_dgus_vp(MP4_FILENAME_SP_LIST1 + (r11_player.now_play_serial % 5) * 0x20 + 0x03,(uint8_t*)&color_red,1);
-        if (r11_send_buf[0] < r11_player.page_mp4_nums) {
-            r11_player.serial = r11_send_buf[0];
-            write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,(uint8_t*)&mp4_name[r11_player.serial][0], MAX_MP3_NAME_LEN>>1);
-            T5lSendUartDataToR11(cmdMP4_PLAY, mp4_name[r11_player.serial]);
-        }
+        write_dgus_vp(MP4_NOW_PLAY_NAME_ADDR,(uint8_t*)&mp4_name[r11_player.serial][0], MAX_MP3_NAME_LEN>>1);
+        T5lSendUartDataToR11((r11_player.state == MP4_STATE_PLAYING) ? cmdMP4_SWITCH : cmdMP4_PLAY,
+                           mp4_name[r11_player.serial]);
     }else if(dgus_value == keyMP4_UPDATE_SDCARD || dgus_value == keyMP4_UPDATE_exUDISK || dgus_value == keyMP4_UPDATE_UDISK)
     {
         if(dgus_value == keyMP4_UPDATE_SDCARD)

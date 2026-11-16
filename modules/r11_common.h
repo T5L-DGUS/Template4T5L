@@ -125,6 +125,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define cmdMP4_STATE                 0x64
 #define cmdMP4_STOP					0x67
 #define cmdMP4_STOP_ACK              0x68
+#define cmdMP4_IMG_SET               0x68    /* T5L发送：设置显示尺寸；接收0x68仍按状态回包解析 */
 #define cmdMP4_AUX_SET              0x6b
 #define cmdMP4_PLAY_BY_NUM          0x74
 #define MP4_STATE_PLAYING            0x01
@@ -271,8 +272,8 @@ void FormatArrayToFullPath(uint8_t *buf, uint8_t len);
  * @param y_point Y坐标
  * @param high    高度
  * @param weight  宽度
- * @param big_small_flag 0x00:小图模式 0x01:全屏模式 0x02:只更新本地显示位置。
- * @note 水机协议在播放/切换/停止指令中携带尺寸，不再发送旧版0x76/0x77尺寸指令。
+ * @param big_small_flag 0x00:小图模式并发送0x68 0x01:全屏模式并发送0x68 0x02:只更新本地显示位置。
+ * @note 0x68携带位置、显示开关、宽高；0x76仅用于切换文件播放。
  */
 void R11ChangePictureLocate(uint16_t x_point, uint16_t y_point, uint16_t high, uint16_t weight, uint8_t big_small_flag);
 
