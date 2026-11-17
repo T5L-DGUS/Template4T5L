@@ -5,7 +5,8 @@
 /project/1.bat
 /project/T5L51.uvgui.*
 /tests/*
-/tools
+/tools/*
+!/tools/v851_factory_image.py
 /tests/*
 
 # Local generation scripts and test harnesses
@@ -23,3 +24,6 @@
 
 /resources
 /docs/*.md
+!/docs/v851_factory_flash.md
+!/tests/v851_factory_mock.h
+!/tests/v851_factory_cases.h

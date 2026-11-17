@@ -134,11 +134,11 @@ typedef            long			int32_t;
 #define v851PROTOCOL_ENABLED             1
 #define v851STATE_FULL_REPORT_ENABLED    1
 
-/* V851工厂设备信息，产品变更时可在此覆盖。 */
+/* V851工厂信息：仅首次初始化空白Flash时使用，已有配置不随固件更新。 */
 #define v851FACTORY_SALES_COUNTRY        "CN"
-#define v851FACTORY_PRODUCT_KEY          "MCQX_PET_CABIN"
-#define v851FACTORY_MODEL                "MCQX-PET-CABIN-V1"
-#define v851FACTORY_HARDWARE_VERSION     "HW-V2.0"
+#define v851FACTORY_PRODUCT_KEY          "MCQX_QXY03"
+#define v851FACTORY_MODEL                "QXY03"
+#define v851FACTORY_HARDWARE_VERSION     "HW-V1.0"
 #define v851FACTORY_FIRMWARE_VERSION     "FW-V1.0.0"
 
 #define sysDGUS_AUTO_UPLOAD_ENABLED      0      /**< V851配网直接轮询0x0600 */

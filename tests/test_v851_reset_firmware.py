@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from tools import t5l_serial_simulator as sim
+from tools import v851_factory_image as factory_image
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,6 +54,25 @@ class ResetFirmwareTests(unittest.TestCase):
     def test_indicator_leds(self):
         self.run_c_harness(harness='v851_indicator_led_harness.c')
 
+    def test_factory_flash_persistence(self):
+        self.run_c_harness('factory')
+
+    def test_factory_image_matches_firmware(self):
+        record = factory_image.build_record(factory_image.defaults())
+        self.assertEqual(len(record), 256)
+        self.assertEqual(factory_image.crc16(record), 0)
+        self.assertEqual(record, factory_image.build_record(factory_image.defaults('T5F')))
+        with tempfile.TemporaryDirectory(prefix='t5l-factory-image-') as directory:
+            image = Path(directory) / 'factory.bin'
+            image.write_bytes(record)
+            self.run_c_harness('factory-image', str(image))
+        for name, _, _, capacity in factory_image.FIELDS:
+            for invalid in ('', 'X' * capacity, 'bad\0value', '中文'):
+                values = factory_image.defaults()
+                values[name] = invalid
+                with self.subTest(name=name, value=invalid), self.assertRaises(ValueError):
+                    factory_image.build_record(values)
+
     def run_c_harness(self, *args, harness='v851_reset_firmware_harness.c'):
         compiler = os.environ.get('HOST_CC') or shutil.which('clang') or shutil.which('gcc')
         local = Path('D:/youngwork/tools/llvm-mingw-20250709-ucrt-x86_64/bin/clang.exe')
@@ -65,18 +85,22 @@ class ResetFirmwareTests(unittest.TestCase):
             (folder / 'sys.h').write_text('''#pragma once
 #include <stdint.h>
 #define xdata
+#define code
 #define v851PROTOCOL_ENABLED 1
 #define v851STATE_FULL_REPORT_ENABLED 0
-#define v851FACTORY_SALES_COUNTRY "CN"
-#define v851FACTORY_PRODUCT_KEY "TEST"
-#define v851FACTORY_MODEL "TEST"
-#define v851FACTORY_HARDWARE_VERSION "1"
-#define v851FACTORY_FIRMWARE_VERSION "1"
+#include "T5LOSFactoryDefaults.h"
+#define flashREAD_FLAG 0x5A
+#define flashWRITE_FLAG 0xA5
+#define sysDGUS_FLASH_RW_CMD 0x0008
+void T5lNorFlashRW(uint8_t, uint8_t, uint16_t, uint16_t, uint8_t *, uint16_t);
 void write_dgus_vp(uint32_t, const uint8_t *, uint16_t);
 void read_dgus_vp(uint32_t, uint8_t *, uint16_t);
 void SwitchPageById(uint8_t);
 uint16_t crc_16(uint8_t *, uint16_t);
 ''', encoding='utf-8')
+            config = (ROOT / 'include/T5L/T5LOSConfig.h').read_text(encoding='utf-8')
+            (folder / 'T5LOSFactoryDefaults.h').write_text('\n'.join(
+                re.findall(r'^#define v851FACTORY_.*$', config, re.M)), encoding='utf-8')
             (folder / 'timer.h').write_text('#include "sys.h"\nuint32_t GetSysTick(void);\n')
             (folder / 'uart.h').write_text('''#include "sys.h"
 typedef struct { uint16_t TxHead, TxTail; uint8_t TxBusy; } UART_TYPE;
@@ -93,7 +117,7 @@ void UartSendData(UART_TYPE *, const uint8_t *, uint16_t);
             (folder / 'switch_impl.h').write_text(switch[:switch.index('\n}') + 2], encoding='utf-8')
             header = (ROOT / 'modules/t5l_stc.h').read_text(encoding='utf-8')
             constants = '\n'.join(re.findall(r'^#define (?:DATALEN|MAIN_ADDR|BACK_ADDR|MAIN_DATA_ADDR|BACK_DATA_ADDR) .*$', header, re.M))
-            service = stc.split('static uint8_t T5lStcServiceFactoryReset(void)', 1)[1].split('void T5L_Stc_Poll(void)', 1)[0]
+            service = stc.split('static uint8_t T5lStcServiceFactoryReset(void)', 1)[1].split('\n}', 1)[0] + '\n}\n'
             branch = stc.split('case 0x2801:', 1)[1].split('case 0x2802:', 1)[0]
             (folder / 'factory_reset_stc.h').write_text(constants + '''
 static uint8_t t5l_factory_reset_pending;

@@ -178,7 +178,10 @@ static void V851FirmwareApplySegment(const V851TlvSegment *segment)
 
 #define V851_NETWORK_STATUS_VP                   0x5201U
 #define V851_MQTT_CONNECTED_VP                   0x5202U
-#define V851_NETWORK_STATUS_TIMEOUT_MS           10000UL
+/* V851 network-status heartbeat arrives every 10 seconds. */
+#define V851_NETWORK_HEARTBEAT_INTERVAL_MS       10000UL
+#define V851_NETWORK_STATUS_TIMEOUT_MS           \
+    (V851_NETWORK_HEARTBEAT_INTERVAL_MS * 3UL)
 
 static uint32_t v851_network_status_tick;
 static uint8_t v851_network_status_active;

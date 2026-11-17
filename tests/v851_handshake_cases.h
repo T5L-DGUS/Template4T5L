@@ -46,7 +46,7 @@ static void test_handshake(void)
     V851ProtocolReceiveFrame(wrong_command, sizeof(wrong_command));
     V851ProtocolReceiveFrame(storage, sizeof(storage));
     assert(!V851ProtocolPeerBootReceived());
-    assert(vp[0x5290 * 2] == 0 && vp[0x52A0 * 2] == 0);
+    assert(vp[0x5390 * 2] == 0 && vp[0x53A0 * 2] == 0);
     assert(!v851_factory_report_pending && !v851_state_dirty_mask);
 
     /* No response, heartbeat, retry or resync, even without any peer notice. */
@@ -58,8 +58,8 @@ static void test_handshake(void)
     assert(sent_count == 4);
     V851ProtocolReceiveFrame(peer_startup, sizeof(peer_startup));
     assert(V851ProtocolPeerBootReceived());
-    assert(strcmp((char *)(vp + 0x5290 * 2), "1.0.0") == 0);
-    assert(strcmp((char *)(vp + 0x52A0 * 2), "1.0.0") == 0);
+    assert(strcmp((char *)(vp + 0x5390 * 2), "1.0.0") == 0);
+    assert(strcmp((char *)(vp + 0x53A0 * 2), "1.0.0") == 0);
     for(i = 0; i < 10; ++i)
     {
         V851ProtocolReceiveFrame(peer_startup, sizeof(peer_startup));

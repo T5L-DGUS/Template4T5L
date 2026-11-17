@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "v851_protocol.c"
+#include "v851_factory.c"
 #include "v851_control_info.c"
 #include "crc_impl.h"
 
@@ -18,6 +19,7 @@ void read_dgus_vp(uint32_t addr, uint8_t *data, uint16_t words)
 { assert(addr + words <= 0x10000); memcpy(data, vp + addr * 2, words * 2); }
 void write_dgus_vp(uint32_t addr, const uint8_t *data, uint16_t words)
 { assert(addr + words <= 0x10000); memcpy(vp + addr * 2, data, words * 2); ++writes; }
+#include "v851_factory_mock.h"
 void UartSendData(UART_TYPE *uart, const uint8_t *data, uint16_t length)
 { (void)uart; (void)data; (void)length; ++tx_count; }
 void V851WifiClearCredentials(void) {}
@@ -36,12 +38,12 @@ void Light_Off(void) { ++other_controls; }
 void UVB_On(uint16_t value) { (void)value; ++other_controls; }
 void UVB_Off(uint8_t automatic) { (void)automatic; ++other_controls; }
 void Heater_On(int16_t value) { (void)value; ++other_controls; }
-void Heater_Off(uint8_t automatic) { (void)automatic; ++other_controls; }
+void Heater_Off(void) { ++other_controls; }
 void Humidifier_On(void) { ++other_controls; }
 void Humidifier_Off(uint8_t automatic) { (void)automatic; ++other_controls; }
 void InWind_On(uint16_t value) { (void)value; ++other_controls; }
 void InWind_Off(void) { ++other_controls; }
-static void Send_Cmd_Ctrl(uint16_t address, uint8_t value)
+void Send_Cmd_Ctrl(uint16_t address, uint16_t value)
 {
     assert(command_count < 32);
     command_address[command_count] = address;

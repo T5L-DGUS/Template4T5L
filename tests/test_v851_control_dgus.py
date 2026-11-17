@@ -125,7 +125,7 @@ class V851ControlDgusTests(unittest.TestCase):
             ("UVB", "UVB_On(setting)", "UVB_Off(0U)"),
             ("ANION", "Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable, ANION_CMDWORD, 1U)", "Dev_Switch_Ctrl(&G_Device_Ctrl.Anion.enable, ANION_CMDWORD, 0U)"),
             ("PLASMA", "Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable, PLASMA_CMDWORD, 1U)", "Dev_Switch_Ctrl(&G_Device_Ctrl.Plasma.enable, PLASMA_CMDWORD, 0U)"),
-            ("CLIMATE", "Heater_On((int16_t)setting)", "Heater_Off(0U)"),
+            ("CLIMATE", "Heater_On((int16_t)setting)", "Heater_Off()"),
             ("HUMIDIFIER", "Humidifier_On()", "Humidifier_Off(0U)"),
             ("INLET_FAN", "InWind_On(setting)", "InWind_Off()"),
         ):

@@ -507,6 +507,16 @@
               <FilePath>..\modules\v851_protocol.c</FilePath>
             </File>
             <File>
+              <FileName>v851_factory.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\modules\v851_factory.c</FilePath>
+            </File>
+            <File>
+              <FileName>v851_factory.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\modules\v851_factory.h</FilePath>
+            </File>
+            <File>
               <FileName>v851_protocol.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\modules\v851_protocol.h</FilePath>

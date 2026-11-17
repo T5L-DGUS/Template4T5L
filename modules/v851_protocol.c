@@ -6,6 +6,7 @@
 #include "uart.h"
 #include "v851_control_info.h"
 #include "v851_wifi.h"
+#include "v851_factory.h"
 
 #include <string.h>
 
@@ -20,19 +21,7 @@
 #define V851_ALARM_SCAN_INTERVAL_MS               500UL
 #define V851_ALARM_VP_BASE                        0x3080UL
 #define V851_ALARM_VP_COUNT                       10U
-#define V851_FACTORY_FIELD_MAX_BYTES              80U
 #define V851_EVENT_ALARM_FIELD_MAX_BYTES          48U
-
-typedef char V851FactoryCountryLengthCheck[
-    ((sizeof(v851FACTORY_SALES_COUNTRY) - 1U) <= 7U) ? 1 : -1];
-typedef char V851FactoryProductKeyLengthCheck[
-    ((sizeof(v851FACTORY_PRODUCT_KEY) - 1U) <= 63U) ? 1 : -1];
-typedef char V851FactoryModelLengthCheck[
-    ((sizeof(v851FACTORY_MODEL) - 1U) <= 63U) ? 1 : -1];
-typedef char V851FactoryHardwareLengthCheck[
-    ((sizeof(v851FACTORY_HARDWARE_VERSION) - 1U) <= 31U) ? 1 : -1];
-typedef char V851FactoryFirmwareLengthCheck[
-    ((sizeof(v851FACTORY_FIRMWARE_VERSION) - 1U) <= 31U) ? 1 : -1];
 
 static uint8_t xdata v851_tlv_tx[V851_TLV_TX_DEPTH][V851_TLV_FRAME_MAX];
 static uint16_t v851_tlv_tx_len[V851_TLV_TX_DEPTH];
@@ -697,27 +686,8 @@ static uint8_t V851ProtocolQueueFactoryReport(void)
     uint8_t fields[V851_FACTORY_FIELD_MAX_BYTES];
     uint16_t offset;
 
-    offset = 0U;
-    if((V851TlvWriteBytes(fields, sizeof(fields), &offset,
-                          V851_TLV_TAG_FACTORY_SALES_COUNTRY,
-                          (const uint8_t *)v851FACTORY_SALES_COUNTRY,
-                          (uint16_t)(sizeof(v851FACTORY_SALES_COUNTRY) - 1U)) == 0U) ||
-       (V851TlvWriteBytes(fields, sizeof(fields), &offset,
-                          V851_TLV_TAG_FACTORY_PRODUCT_KEY,
-                          (const uint8_t *)v851FACTORY_PRODUCT_KEY,
-                          (uint16_t)(sizeof(v851FACTORY_PRODUCT_KEY) - 1U)) == 0U) ||
-       (V851TlvWriteBytes(fields, sizeof(fields), &offset,
-                          V851_TLV_TAG_FACTORY_MODEL,
-                          (const uint8_t *)v851FACTORY_MODEL,
-                          (uint16_t)(sizeof(v851FACTORY_MODEL) - 1U)) == 0U) ||
-       (V851TlvWriteBytes(fields, sizeof(fields), &offset,
-                          V851_TLV_TAG_FACTORY_HW_VERSION,
-                          (const uint8_t *)v851FACTORY_HARDWARE_VERSION,
-                          (uint16_t)(sizeof(v851FACTORY_HARDWARE_VERSION) - 1U)) == 0U) ||
-       (V851TlvWriteBytes(fields, sizeof(fields), &offset,
-                          V851_TLV_TAG_FACTORY_FW_VERSION,
-                          (const uint8_t *)v851FACTORY_FIRMWARE_VERSION,
-                          (uint16_t)(sizeof(v851FACTORY_FIRMWARE_VERSION) - 1U)) == 0U))
+    offset = V851FactoryBuildFields(fields, sizeof(fields));
+    if(offset == 0U)
     {
         return 0U;
     }
@@ -732,6 +702,12 @@ static uint8_t V851ProtocolServiceFactory(void)
 {
     if(v851_factory_report_pending == 0U)
     {
+        return 0U;
+    }
+    if(V851FactoryReady() == 0U)
+    {
+        /* An unreadable identity must not block regular state reports. */
+        v851_factory_report_pending = 0U;
         return 0U;
     }
     if(V851ProtocolQueueFactoryReport() != 0U)
@@ -982,6 +958,7 @@ void V851ProtocolInit(void)
 {
     uint32_t tick;
 
+    V851FactoryInit();
     memset(v851_tlv_tx_len, 0, sizeof(v851_tlv_tx_len));
     memset(v851_wifi_tx_len, 0, sizeof(v851_wifi_tx_len));
     v851_tlv_tx_head = 0U;

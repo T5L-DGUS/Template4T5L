@@ -28,9 +28,9 @@ class V851FactoryAlarmSourceTests(unittest.TestCase):
     def test_factory_defaults_are_configurable_on_t5l_and_t5f(self) -> None:
         defaults = {
             "v851FACTORY_SALES_COUNTRY": '"CN"',
-            "v851FACTORY_PRODUCT_KEY": '"MCQX_PET_CABIN"',
-            "v851FACTORY_MODEL": '"MCQX-PET-CABIN-V1"',
-            "v851FACTORY_HARDWARE_VERSION": '"HW-V2.0"',
+            "v851FACTORY_PRODUCT_KEY": '"MCQX_QXY03"',
+            "v851FACTORY_MODEL": '"QXY03"',
+            "v851FACTORY_HARDWARE_VERSION": '"HW-V1.0"',
             "v851FACTORY_FIRMWARE_VERSION": '"FW-V1.0.0"',
         }
         for config in (self.config_t5l, self.config_t5f):

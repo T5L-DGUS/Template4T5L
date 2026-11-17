@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "v851_protocol.c"
+#include "v851_factory.c"
 #include "v851_wifi.c"
 #include "v851_tlv_app.c"
 #include "crc_impl.h"
@@ -20,6 +21,7 @@ void write_dgus_vp(uint32_t addr, const uint8_t *data, uint16_t words)
 { assert(addr + words <= 0x10000); memcpy(vp + addr * 2, data, words * 2); ++writes; }
 void read_dgus_vp(uint32_t addr, uint8_t *data, uint16_t words)
 { memcpy(data, vp + addr * 2, words * 2); }
+#include "v851_factory_mock.h"
 void UartSendData(UART_TYPE *uart, const uint8_t *data, uint16_t length)
 { assert(sent_count < 16); memcpy(sent[sent_count], data, length); sent_len[sent_count++] = length;
   if(hold_uart_busy) uart->TxBusy = 1; }
@@ -51,7 +53,7 @@ static void Set_Input(uint8_t page, uint8_t control) { (void)page; (void)control
 static void nor_flash_write(uint32_t addr, uint8_t *buffer, uint16_t words)
 {
     unsigned i;
-    (void)addr;
+    assert(addr >= 0x0800U);
     assert(!V851ProtocolFactoryResetBusy());
     assert(!Uart4.TxBusy && Uart4.TxHead == Uart4.TxTail);
     assert(sent_count && sent[sent_count - 1][4] == 0x39);
@@ -128,20 +130,20 @@ static void test_versions(void)
     unsigned old_writes, i;
     memset(vp, 0xA5, sizeof(vp));
     firmware(both, sizeof(both));
-    assert(strcmp((char *)(vp + 0x5290 * 2), "2.0.0") == 0);
-    assert(strcmp((char *)(vp + 0x52A0 * 2), "2.0.0") == 0);
+    assert(strcmp((char *)(vp + 0x5390 * 2), "2.0.0") == 0);
+    assert(strcmp((char *)(vp + 0x53A0 * 2), "2.0.0") == 0);
     firmware(shorter, sizeof(shorter));
-    for(i = 1; i < 32; ++i) assert(vp[0x5290 * 2 + i] == 0);
-    assert(vp[0x5290 * 2] == '3');
-    assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
+    for(i = 1; i < 32; ++i) assert(vp[0x5390 * 2 + i] == 0);
+    assert(vp[0x5390 * 2] == '3');
+    assert(memcmp(vp + 0x5390 * 2, vp + 0x53A0 * 2, 32) == 0);
     old_writes = writes;
     firmware(legacy, sizeof(legacy));
     assert(writes == old_writes);
     firmware(reversed, sizeof(reversed));
-    assert(vp[0x5290 * 2] == '4');
-    assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
+    assert(vp[0x5390 * 2] == '4');
+    assert(memcmp(vp + 0x5390 * 2, vp + 0x53A0 * 2, 32) == 0);
     firmware(empty, sizeof(empty));
-    for(i = 0; i < 32; ++i) { assert(vp[0x52A0 * 2 + i] == 0); assert(vp[0x5290 * 2 + i] == 0); }
+    for(i = 0; i < 32; ++i) { assert(vp[0x53A0 * 2 + i] == 0); assert(vp[0x5390 * 2 + i] == 0); }
     old_writes = writes;
     firmware(malformed, sizeof(malformed));
     firmware(unknown, sizeof(unknown));
@@ -157,12 +159,12 @@ static void test_versions(void)
         unsigned j;
         long_field[2] = (uint8_t)i;
         firmware(long_field, (uint16_t)(i + 3));
-        for(j = 0; j < 31; ++j) assert(vp[0x5290 * 2 + j] == 'V');
-        assert(vp[0x5290 * 2 + 31] == 0);
-        assert(memcmp(vp + 0x5290 * 2, vp + 0x52A0 * 2, 32) == 0);
+        for(j = 0; j < 31; ++j) assert(vp[0x5390 * 2 + j] == 'V');
+        assert(vp[0x5390 * 2 + 31] == 0);
+        assert(memcmp(vp + 0x5390 * 2, vp + 0x53A0 * 2, 32) == 0);
     }
-    assert(vp[0x528F * 2] == 0xA5);
-    assert(vp[0x52B0 * 2] == 0xA5);
+    assert(vp[0x538F * 2] == 0xA5);
+    assert(vp[0x53B0 * 2] == 0xA5);
 }
 
 static void test_reset(void)
@@ -266,38 +268,44 @@ static void test_network_status(void)
 
     /* A report at tick zero must arm the timeout too. */
     V851ProtocolReceiveFrame(sample, sizeof(sample));
-    mock_tick = 9999;
+    mock_tick = 10000;
     V851ProtocolTask();
     assert_network_status(1, 1);
-    mock_tick = 10000;
+    mock_tick = 20000;
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    mock_tick = 29999;
+    V851ProtocolTask();
+    assert_network_status(1, 1);
+    mock_tick = 30000;
     V851ProtocolTask();
     assert_network_status(0, 0);
     old_writes = writes;
-    mock_tick = 20000;
+    mock_tick = 40000;
     V851ProtocolTask();
     assert(writes == old_writes);
 
-    /* New reports restore the indicators and restart the full 10 seconds. */
+    /* New reports restore the indicators and restart all three 10-second periods. */
     V851ProtocolReceiveFrame(sample, sizeof(sample));
     assert_network_status(1, 1);
-    mock_tick = 29000;
+    mock_tick = 49000;
     V851ProtocolReceiveFrame(sample, sizeof(sample));
-    mock_tick = 30000;
+    mock_tick = 70000;
     V851ProtocolTask();
     assert_network_status(1, 1);
-    mock_tick = 38999;
+    mock_tick = 78999;
     V851ProtocolReceiveFrame(unrelated, sizeof(unrelated));
     V851ProtocolReceiveFrame(sample, sizeof(sample) - 1);
     V851ProtocolTask();
     assert_network_status(1, 1);
-    mock_tick = 39000;
+    mock_tick = 79000;
     V851ProtocolTask();
     assert_network_status(0, 0);
 
     /* Unsigned elapsed time must work across the 32-bit tick rollover. */
     mock_tick = 0xFFFFFF00U;
     V851ProtocolReceiveFrame(sample, sizeof(sample));
-    mock_tick += 9999U;
+    mock_tick += 29999U;
     V851ProtocolTask();
     assert_network_status(1, 1);
     ++mock_tick;
@@ -308,14 +316,37 @@ static void test_network_status(void)
     V851TlvApplicationFactoryReset();
     assert_network_status(0, 0);
     old_writes = writes;
-    mock_tick += 10000U;
+    mock_tick += 30000U;
     V851ProtocolTask();
     assert(writes == old_writes);
     assert(vp[0x5200 * 2 + 1] == 0xA5 && vp[0x5203 * 2] == 0xA5);
 }
 
+#include "v851_factory_cases.h"
+
 int main(int argc, char **argv)
 {
+    if(argc == 3 && strcmp(argv[1], "factory-image") == 0)
+    {
+        FILE *file = fopen(argv[2], "rb");
+        uint8_t image[256];
+        assert(file && fread(image, 1, sizeof(image), file) == sizeof(image));
+        assert(fgetc(file) == EOF);
+        fclose(file);
+        factory_prepare(0xFF);
+        InitAfterStartupHandshake();
+        assert(memcmp(image, factory_nor + 0x0200, sizeof(image)) == 0);
+        factory_prepare(0xFF);
+        memcpy(factory_nor + 0x0200, image, sizeof(image));
+        InitAfterStartupHandshake();
+        assert(V851FactoryReady() && factory_writes == 0);
+        return 0;
+    }
+    if(argc == 2 && strcmp(argv[1], "factory") == 0)
+    {
+        test_factory_flash();
+        return 0;
+    }
     if(argc == 2 && strcmp(argv[1], "network") == 0)
     {
         test_network_status();
