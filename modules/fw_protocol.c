@@ -580,7 +580,8 @@ static void PassOpen(uint8_t mode,uint16_t target,uint8_t notify)
     PopupClose();
     home_event=home_target=0;
     pass_origin=ReadPageId(); if(pass_origin==0 || pass_origin==1 || pass_origin==42 || pass_origin==FW_UI_PASS_PAGE) pass_origin=1;
-    if(mode==1) { target=42; pass_origin=1; }
+    /* Login succeeds at home, but cancellation returns to the actual origin. */
+    if(mode==1) target=42;
     if(mode==4 && !UiAdvanced(pass_origin)) {
         admin_origin=pass_origin==1?42:pass_origin; advanced2_origin=admin_origin;
     }
@@ -630,7 +631,14 @@ static void PassEvent(uint16_t e)
     if(ReadPageId()!=FW_UI_PASS_PAGE || !pass_mode) return;
     if(e>=0x0510 && e<=0x0519 && pass_length<6) { pass_input=pass_input*10+(e&15); ++pass_length; }
     else if(e==0x0520) { if(pass_length) { pass_input/=10; --pass_length; } }
-    else if(e==0x0522) { pass_mode=0; UiNavigate(pass_origin); }
+    else if(e==0x0522) {
+        pass_mode=0; pass_notify=0; pass_input=pass_first=0; pass_length=0;
+        /* Do not route locked home through UiNavigate: it would open login again.
+         * Suppress this finger until release so 001 cannot immediately re-open it. */
+        pass_touch_guard=1; pass_guard_at=FwNow(); FwSet(0x0600,0);
+        if(pass_origin==1 && pass_enabled && !pass_authorized) SwitchPageById(1);
+        else UiNavigate(pass_origin);
+    }
     else if(e==0x0521) {
         if(pass_length!=6) { FwSet(FW_UI_PASS_STATE,5); return; }
         if(pass_mode==4 || pass_mode==5) {
