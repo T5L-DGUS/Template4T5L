@@ -88,7 +88,7 @@ void SysTaskRemove(uint8_t taskID)
  */
 static void SysTaskScheduler(void)
 {
-    uint8_t i;
+    static uint8_t i;
     for(i = 0; i < SysTaskCount; i++)
     {
         if(SysTasks[i].taskCounter == 0)
