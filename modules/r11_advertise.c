@@ -8,6 +8,18 @@ WIFI_PAGE_S wifi_page;
 R11_STATE r11_state = {UINT16_PORT_MAX}; // 初始化R11状态
 NET_CONNECTED_STATE net_connected_state = NET_DISCONNECTED;
 
+void R11AdvertiseNotifyReady(void)
+{
+    uint8_t frame[7] = {0xAAU, 0x55U, 0x00U, 0x03U, 0xF3U, 0U, 0U};
+    uint16_t crc;
+
+    /* Match BOOT's AA55 CRC: include header/length, low byte first. */
+    crc = crc_16(frame, 5U);
+    frame[5] = (uint8_t)crc;
+    frame[6] = (uint8_t)(crc >> 8);
+    UartSendData(&Uart_R11, frame, sizeof(frame));
+}
+
 void R11ConfigInitFormLib(void)
 {
     uint16_t read_param[30];

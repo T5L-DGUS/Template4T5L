@@ -139,6 +139,8 @@ extern WIFI_PAGE_S wifi_page;
 extern NET_CONNECTED_STATE net_connected_state;
 
 void R11ConfigInitFormLib(void);
+/* Call once after APP initialization, before task dispatch, to notify V851. */
+void R11AdvertiseNotifyReady(void);
 void R11AdvertiseTask(void);
 void UartR11UserAdvertiseProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len);
 #endif  /* sysADVERTISE_MODE_ENABLED */

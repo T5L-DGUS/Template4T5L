@@ -70,7 +70,10 @@ void main(void)
   SysTaskAdd(3, R11_TASK_INTERVAL, R11AdvertiseTask);
   #endif /* sysADVERTISE_MODE_ENABLED */
 
-  
+  #if sysADVERTISE_MODE_ENABLED
+  /* APP is ready; do not wait for V851's own startup handshake. */
+  R11AdvertiseNotifyReady();
+  #endif /* sysADVERTISE_MODE_ENABLED */
 
   while(1)
   {

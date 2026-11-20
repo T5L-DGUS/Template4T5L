@@ -399,6 +399,9 @@ void UartInit(void)
 void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len)
 {
     uint16_t i;
+#if uartUART5_ENABLED
+    uint8_t tx_irq_enabled;
+#endif
 
     for(i=0; i<len; i++)
     {
@@ -436,6 +439,27 @@ void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len)
         
     }
 
+    #if uartUART5_ENABLED
+    if(uart == &Uart5)
+    {
+        /* Start idle TX with a real byte; only hardware completion drives ISR. */
+        tx_irq_enabled = ES3T;
+        ES3T = 0;
+        if((uart->TxBusy == 0) && (uart->TxHead != uart->TxTail))
+        {
+            uart->TxBusy = 1;
+            #if uartUART5_485_ENABLED
+            TR5 = 1;
+            #endif
+            SCON3T &= 0xFE;
+            SBUF3_TX = Uart5TxBuffer[uart->TxTail++];
+            uart->TxTail %= uartUART5_TXBUF_SIZE;
+        }
+        ES3T = tx_irq_enabled;
+        return;
+    }
+    #endif /* uartUART5_ENABLED */
+
     if(uart->TxBusy == 0)
     {
         uart->TxBusy = 1;
@@ -472,20 +496,6 @@ void UartSendData(UART_TYPE *uart, uint8_t *buf, uint16_t len)
                 }
                 #endif
                 SCON2T |= 0x01; 
-            }
-        }
-        #endif
-
-        #if uartUART5_ENABLED
-        {
-            if(uart == &Uart5)
-            {
-                #if uartUART5_485_ENABLED
-                {
-                    TR5 = 1; 
-                }
-                #endif
-                SCON3T |= 0x01; 
             }
         }
         #endif
