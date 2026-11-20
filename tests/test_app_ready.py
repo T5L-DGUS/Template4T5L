@@ -129,6 +129,7 @@ static unsigned video_init_process;
 static void R11RestartInit(void) {assert(!"unexpected V851 handshake");}
 static void R11VideoPlayerProcess(void) {assert(!"unexpected V851 handshake");}
 static void R11ValueScanTask(void) {assert(!"unexpected V851 handshake");}
+static void R11NoneTouchRecoveryPlayVideo(void) {assert(!"unexpected V851 handshake");}
 void R11ConfigInitFormLib(void) {assert(!config_done && !wire_len);config_done=1;}
 void T5LCpuInit(void) {assert(config_done && !wire_len);UartInit();cpu_done=1;}
 void RtcInit(void) {assert(cpu_done && !wire_len);rtc_done=1;}

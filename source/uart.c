@@ -550,6 +550,9 @@ static void UartStandardDwin8283Protocal(UART_TYPE *uart,uint8_t *frame, uint16_
 {
     uint16_t i=0,CrcFlag = 0,CrcResult = 0;
     uint8_t send_return_frame[256];
+    #if sysADVERTISE_MODE_ENABLED
+    uint16_t now_pic;
+    #endif
     if(frame[0] == 0x5a && frame[1] == 0xa5 && frame[3] == 0x82)
     {
         if(prvDwin8283CrcCheck(frame,len,&CrcFlag) == 0)
@@ -564,7 +567,16 @@ static void UartStandardDwin8283Protocal(UART_TYPE *uart,uint8_t *frame, uint16_
         {
             frame[2] -= 2;
         }
-        write_dgus_vp((frame[4] << 8) | frame[5], &frame[6], (frame[2] - 3) >> 1);
+        #if sysADVERTISE_MODE_ENABLED
+        /* 视频/拔出提示页不接受外部切页，仍允许其他VP写入及正常应答。 */
+        read_dgus_vp(sysDGUS_PIC_NOW, (uint8_t *)&now_pic, 1);
+        if(!(((page_st.fullvideo_flag == 0x5a && now_pic == page_st.fullvideo_page) ||
+              now_pic == STORAGE_DISCONN_PAGE) &&
+             frame[2] >= 7 && frame[4] == 0x00 && frame[5] == 0x84 && frame[6] == 0x5a))
+        #endif
+        {
+            write_dgus_vp((frame[4] << 8) | frame[5], &frame[6], (frame[2] - 3) >> 1);
+        }
         #if uartUART_82CMD_RETURN
         i=0;
         send_return_frame[i++] = 0x5a;

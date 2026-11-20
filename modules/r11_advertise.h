@@ -55,6 +55,10 @@
 
 
 #define R11_TASK_INTERVAL       100
+#define R11_IDLE_PLAY_TIME_MS   60000UL
+#define keyMP4_IDLE_RETURN      0x0200
+#define keyMP4_IDLE_LIST        0x0201
+#define keyMP4_IDLE_RESTART     0x0202
 #define R11_SCAN_ADDRESS     	(uint32_t)0x0600
 #define netWIFI_STATUS_ADDR    	0x06D8
 #define COMIC_STATUS_ADDR       0x06D9     /** 统一的过渡动画使能标志，初始写1 */

@@ -70,6 +70,9 @@ typedef enum
 } VIDEO_INIT_PROCESS;
 
 extern VIDEO_INIT_PROCESS video_init_process; 
+#if sysADVERTISE_MODE_ENABLED
+extern uint8_t first_in_flag;  /* 待机满一分钟后允许启动自动播放。 */
+#endif
 
 
 /** 视频播放相关定义区域 */
@@ -135,7 +138,11 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define cmdMP4_LOOP_MODE_SET	   	0x90
 #define cmdMP4_STORAGE_MEDIUM_STATUS 0xb0
 #define cmdMP4_NOW_PLAY_NUMBER      0xb1
+#if sysADVERTISE_MODE_ENABLED
+#define STORAGE_DISCONN_PAGE         20
+#else
 #define STORAGE_DISCONN_PAGE         0
+#endif
 #define cmdWIFI_SCAN                0xc0
 #define cmdWIFI_CONNECT             0xc1
 #define cmdSET_TERNARY_CODE         0xf0

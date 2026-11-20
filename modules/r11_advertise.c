@@ -8,6 +8,8 @@ MAINVIEW_S mainview;
 WIFI_PAGE_S wifi_page;
 R11_STATE r11_state = {UINT16_PORT_MAX}; // 初始化R11状态
 NET_CONNECTED_STATE net_connected_state = NET_DISCONNECTED;
+static uint16_t idle_touch_count = 0;
+static uint16_t idle_return_page = 0;
 
 void R11AdvertiseNotifyReady(void)
 {
@@ -126,6 +128,9 @@ static void R11StartPowerInit(void)
 static void R11RestartInit()
 {
 	uint16_t write_param = 1;
+    idle_touch_count = 0;
+    first_in_flag = 0;
+    read_dgus_vp(sysDGUS_PIC_NOW, (uint8_t *)&idle_return_page, 1);
     R11PageInitChange();
 	T5lSendUartDataToR11(cmdSET_TERNARY_CODE,NULL);
 	delay_ms(100);
@@ -133,6 +138,95 @@ static void R11RestartInit()
 	write_dgus_vp(COMIC_STATUS_ADDR,(uint8_t *)&write_param,1);
 	R11StartPowerInit();
     R11TimezoneSync();
+}
+
+
+static void R11NoneTouchRecoveryPlayVideo(void)
+{
+    uint8_t touch_status[4], rotate_param[2], ratio, touched;
+    uint16_t key_value, now_pic, width, height;
+    uint16_t zero_value = 0, recycle_set = 0x0102;
+
+    read_dgus_vp(sysDGUS_TP_STATUS, touch_status, 2);
+    read_dgus_vp(R11_SCAN_ADDRESS, (uint8_t *)&key_value, 1);
+    touched = (touch_status[0] == 0x5a);
+    if(touched)
+    {
+        idle_touch_count = 0;
+        touch_status[0] = 0;
+        write_dgus_vp(sysDGUS_TP_STATUS, touch_status, 2);
+    }
+
+    if(key_value == keyMP4_IDLE_RETURN || key_value == keyMP4_IDLE_RESTART)
+    {
+        idle_touch_count = 0;
+        T5lSendUartDataToR11(cmdMP4_PAUSE, NULL);
+        if(key_value == keyMP4_IDLE_RESTART || video_init_process != VIDEO_PROCESS_COMPLETE)
+        {
+            /* 尚未开始播放就返回时，下次待机仍需完整启动，不能只发恢复命令。 */
+            first_in_flag = 0;
+            video_init_process = VIDEO_PROCESS_VOLUME;
+        }
+        SwitchPageById(idle_return_page);
+        write_dgus_vp(R11_SCAN_ADDRESS, (uint8_t *)&zero_value, 1);
+        return;
+    }else if(key_value == keyMP4_IDLE_LIST)
+    {
+        idle_touch_count = 0;
+        T5lSendUartDataToR11(cmdMP4_LOOP_MODE_SET, (uint8_t *)&recycle_set);
+        if(page_st.video_flag == 0x5a)
+        {
+            SwitchPageById((uint16_t)page_st.video_page);
+        }
+        write_dgus_vp(R11_SCAN_ADDRESS, (uint8_t *)&zero_value, 1);
+        return;
+    }
+
+    read_dgus_vp(sysDGUS_PIC_NOW, (uint8_t *)&now_pic, 1);
+    if(page_st.fullvideo_flag != 0x5a || now_pic == page_st.fullvideo_page ||
+       (page_st.video_flag == 0x5a && now_pic == page_st.video_page) ||
+       now_pic == STORAGE_DISCONN_PAGE)
+    {
+        idle_touch_count = 0;
+        return;
+    }
+    /* 本次触摸和持续按压均不计入无触摸时间。 */
+    if(touched || touch_status[1] == 0x01 || touch_status[1] == 0x03)
+    {
+        idle_touch_count = 0;
+        return;
+    }
+    idle_touch_count++;
+    if(idle_touch_count < R11_IDLE_PLAY_TIME_MS / R11_TASK_INTERVAL)
+    {
+        return;
+    }
+    idle_touch_count = 0;
+    idle_return_page = now_pic;
+    if(first_in_flag == 0)
+    {
+        /* 首次进入也记录返回页，再由初始化流程查询并播放首个视频。 */
+        first_in_flag = 1;
+        return;
+    }
+
+    /* V851恢复播放前同步全屏尺寸，保持0x68/0x78协议格式。 */
+    ratio = (uint8_t)screen_opt.screen_ratio;
+    if(ratio >= 5)
+    {
+        ratio = 0;
+    }
+    width = pixels_arr_h2[ratio];
+    height = pixels_arr_l2[ratio];
+    read_dgus_vp(sysDGUS_SYSTEM_CONFIG, rotate_param, 1);
+    if((rotate_param[1] & 0x01) != 0)
+    {
+        width = pixels_arr_l2[ratio];
+        height = pixels_arr_h2[ratio];
+    }
+    R11ChangePictureLocate(0, 0, width, height, 0x01);
+    T5lSendUartDataToR11(cmdMP4_REPLAY, NULL);
+    SwitchPageById((uint16_t)page_st.fullvideo_page);
 }
 
 
@@ -175,8 +269,9 @@ void R11AdvertiseTask(void)
         r11_state.restart_flag = 2;  /* 重置重启标志 */
     }else if(r11_state.restart_flag == 2)
 	{
-        R11VideoPlayerProcess();
 		R11ValueScanTask();
+        R11NoneTouchRecoveryPlayVideo();
+        R11VideoPlayerProcess();
 	}
 }
 

@@ -75,6 +75,9 @@ uint16_t mp4_name_len[5];
 PLAYER_T r11_player;
 
 VIDEO_INIT_PROCESS video_init_process = VIDEO_PROCESS_UNINIT;
+#if sysADVERTISE_MODE_ENABLED
+uint8_t first_in_flag = 0;
+#endif
 uint8_t wifi_now_offset = 0;
 
 /*用于视频播放列表高亮显示的颜色*/
@@ -418,9 +421,9 @@ static void R11PlayHighlightVideo(void)
     {
         write_dgus_vp(MP4_FILENAME_SP_LIST1 + i * 0x20 + 0x03,(uint8_t*)&color_white,1);
     }
-    if(r11_player.now_play_serial == 0)
+    if(r11_player.now_play_serial == 0 && r11_player.now_play_page != 1)
     {
-        /*循环到第一个视频了*/
+        /* 跨页循环回首个视频才重新查询，首次/重复上报首项不重刷列表。 */
         r11_player.now_play_page = 1;
         r11_send_buf[0] = r11_player.store_type;
         r11_send_buf[1] = r11_player.Document_type = MP4;
@@ -443,9 +446,15 @@ static void R11PlayHighlightVideo(void)
 void R11VideoPlayerProcess(void)
 {
     static uint16_t search_retry_count = 10;
-    static uint16_t read_param[6] = 0;     /**@note 需要改为静态变量，因为会多次进入此函数 */
+    static uint16_t read_param[6] = {0};     /**@note 需要改为静态变量，因为会多次进入此函数 */
     uint16_t rotate_angle;
     uint8_t r11_send_buf[6];
+    #if sysADVERTISE_MODE_ENABLED
+    if(first_in_flag == 0 && video_init_process != VIDEO_PROCESS_UNINIT)
+    {
+        return;
+    }
+    #endif
     if(video_init_process == VIDEO_PROCESS_UNINIT)
     {
 	    T5lJpegInit();
@@ -456,14 +465,22 @@ void R11VideoPlayerProcess(void)
         r11_player.now_play_page = 1;
         r11_player.now_play_serial = 0;
         r11_player.total_serial = 0;
+        r11_player.page_mp4_nums = 0;
         r11_player.state = 0;
+        search_retry_count = 10;
         /** 0.读取音量和循环信息 */
         FlashToDgus(flashMAIN_BLOCK_ORDER, VOLUME_SET_ADDR, VOLUME_SET_ADDR,0x06);
         read_dgus_vp(VOLUME_SET_ADDR, (uint8_t *)&read_param[0], 6);
         Big_Small_Flag = (read_param[5] == 0x0001) ? 0x01 : 0x00;
+        #if sysADVERTISE_MODE_ENABLED
+        /* 待机播放采用全屏全循环，保留用户音量且不改写持久化设置。 */
+        read_param[2] = 0x0102;
+        read_param[5] = 0x0001;
+        #endif
         video_init_process = VIDEO_PROCESS_VOLUME;
     }else if(video_init_process == VIDEO_PROCESS_VOLUME)
     {
+        search_retry_count = 10;
         if(read_param[0] > MAX_VOLUME)
         {
             read_param[0] = MAX_VOLUME;
@@ -533,11 +550,12 @@ void R11VideoPlayerProcess(void)
         #if sysBEAUTY_MODE_ENABLED
         r11_send_buf[0] = r11_player.store_type = SDCARD;
         #elif sysADVERTISE_MODE_ENABLED
-        r11_send_buf[0] = r11_player.store_type = exUDISK;
+        r11_send_buf[0] = r11_player.store_type = SDCARD;
         #else
         r11_send_buf[0] = r11_player.store_type = SDCARD;
         #endif /* sysADVERTISE_MODE_ENABLED END */
         r11_send_buf[1] = MP4;
+        r11_player.page_mp4_nums = 0;
         T5lSendUartDataToR11(cmdMP4_UPDATEFILE, r11_send_buf);
         if((read_param[2]&0xff00) != 0x0000)
         {
@@ -1242,6 +1260,10 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
              * 2.播放下载的视频，对应全部循环，此时t5l存储0x0002，r11发送0x0100
              * 3.播放全部视频，对应全部循环，此时t5l存储0x0102，r11发送0x0102
              */
+            if(frame[5] == 0x01 && len < 7)
+            {
+                return;
+            }
             if(frame[5] == 0x00)    /*下载完不播放，停止循环*/
             {
                 write_param[0] = 0x0000;
@@ -1253,7 +1275,11 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
                 }else if(frame[6] == 0x02)
                 {
                     write_param[0] = 0x0102;
+                }else{
+                    return;
                 }
+            }else{
+                return;
             }
             write_dgus_vp(LOOP_MODE_ADDR, (uint8_t *)&write_param[0], 0x01);
             DgusToFlash(flashMAIN_BLOCK_ORDER, LOOP_MODE_ADDR, LOOP_MODE_ADDR, 0x02);
@@ -1267,6 +1293,7 @@ void UartR11UserVideoProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
             #endif /* sysADVERTISE_MODE_ENABLED END */
             write_param[0] = r11_player.store_type<<8|MP4;
             T5lSendUartDataToR11(cmdMP4_UPDATEFILE, (uint8_t *)&write_param[0]);
+            break;
         case cmdMP4_NOW_PLAY_NUMBER:
             /* 当前播放状态更改，需要更新*/
             r11_player.now_play_serial = (uint16_t)frame[5];
