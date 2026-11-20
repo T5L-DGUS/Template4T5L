@@ -1,4 +1,5 @@
 #include "r11_advertise.h"
+#include "r11_timezone.h"
 
 #if sysADVERTISE_MODE_ENABLED
 
@@ -131,6 +132,7 @@ static void R11RestartInit()
 	T5lSendUartDataToR11(cmdSET_WEBSOCKET,NULL);
 	write_dgus_vp(COMIC_STATUS_ADDR,(uint8_t *)&write_param,1);
 	R11StartPowerInit();
+    R11TimezoneSync();
 }
 
 
@@ -165,6 +167,7 @@ static void R11ValueScanTask(void)
 
 void R11AdvertiseTask(void)
 {
+    R11TimezoneTask();
     if(r11_state.restart_flag == 1)
     {
         R11RestartInit();
@@ -180,7 +183,20 @@ void R11AdvertiseTask(void)
 
 void UartR11UserAdvertiseProtocol(UART_TYPE *uart,uint8_t *frame, uint16_t len)
 {
-	uint16_t now_pic,crc16;
+	uint16_t now_pic;
+    if(len < 5U)
+    {
+        return;
+    }
+    if(frame[4] == cmdSET_TIMEZONE)
+    {
+        UartR11UserTimezoneProtocol(uart, frame, len);
+        return;
+    }
+    if(len < 7U)
+    {
+        return;
+    }
     if(frame[0] == 0xAA && frame[1] == 0x55 && frame[4] == 0x82 && uart == &Uart_R11)
     {
         if(len < 6 || len < ((frame[2]<<8|frame[3])+4))

@@ -36,7 +36,7 @@
  */
 static uint8_t RtcCalcWeek(uint8_t *prtc_set)
 {
-    uint8_t year = prtc_set[0] +2000;
+    uint16_t year = (uint16_t)prtc_set[0] + 2000U;
     uint8_t month = prtc_set[1];
     uint8_t day = prtc_set[2];
     uint8_t zeller;

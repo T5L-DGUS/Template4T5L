@@ -30,6 +30,7 @@
 #if sysADVERTISE_MODE_ENABLED
 #include "r11_common.h"
 #include "r11_advertise.h"
+#include "r11_timezone.h"
 #endif /* sysADVERTISE_MODE_ENABLED */
 
 void main(void)
@@ -46,6 +47,9 @@ void main(void)
   T5LCpuInit();
 
   RtcInit();
+  #if sysADVERTISE_MODE_ENABLED
+  R11TimezoneInit();
+  #endif
   SysTaskAdd(0, RTC_INTERVAL, RtcTask);
 
   // SysTaskAdd(1, COUNT_TASK_INTERVAL, CountTask);

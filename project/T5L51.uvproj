@@ -502,6 +502,16 @@
           <GroupName>modules</GroupName>
           <Files>
             <File>
+              <FileName>r11_timezone.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\modules\r11_timezone.c</FilePath>
+            </File>
+            <File>
+              <FileName>r11_timezone.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\modules\r11_timezone.h</FilePath>
+            </File>
+            <File>
               <FileName>rtc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\modules\rtc.c</FilePath>

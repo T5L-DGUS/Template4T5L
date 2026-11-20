@@ -616,6 +616,9 @@ void UartReadFrame(UART_TYPE *uart)
 {
     uint8_t frame[uartUART_COMMON_FRAME_SIZE];
     uint16_t i,rx_head_bak,one_frame_len,total_frame_len;
+    #if sysADVERTISE_MODE_ENABLED
+    uint8_t keep_r11_fragment = 0U;
+    #endif
     if(uart->RxFlag == UART_NON_REC)
         return;
     if(uart->RxTimeout == 0)
@@ -660,11 +663,28 @@ void UartReadFrame(UART_TYPE *uart)
             #endif /* uartUART5_ENABLED */
         }   
         total_frame_len = i;
-        while(1)
+        while(i > 0U)
         {
-            if(frame[total_frame_len - i] == 0x5a && frame[total_frame_len - i + 1] == 0xa5)
+            #if sysADVERTISE_MODE_ENABLED
+            /* Keep a possible F4 header split across UART idle periods. */
+            if(uart == &Uart_R11 && i == 1U && frame[total_frame_len - i] == 0xAAU)
             {
+                keep_r11_fragment = 1U;
+                break;
+            }
+            #endif
+            if(i >= 2U && frame[total_frame_len - i] == 0x5a && frame[total_frame_len - i + 1] == 0xa5)
+            {
+                if(i < 3U)
+                {
+                    break;
+                }
                 one_frame_len = frame[total_frame_len - i + 2] + 3;
+                if(one_frame_len < 4U)
+                {
+                    i--;
+                    continue;
+                }
                 if(i < one_frame_len)
                 {
                     break;
@@ -677,9 +697,37 @@ void UartReadFrame(UART_TYPE *uart)
                 UartR11UserN5CameraProtocol(uart, &frame[total_frame_len - i], one_frame_len);
                 #endif /* sysN5CAMERA_MODE_ENABLED */
                 i -= one_frame_len;
-            }else if(frame[total_frame_len - i] == 0xaa && frame[total_frame_len - i + 1] == 0x55)
+            }else if(i >= 2U && frame[total_frame_len - i] == 0xaa && frame[total_frame_len - i + 1] == 0x55)
             {
+                if(i < 5U)
+                {
+                    #if sysADVERTISE_MODE_ENABLED
+                    if(uart == &Uart_R11)
+                    {
+                        keep_r11_fragment = 1U;
+                    }
+                    #endif
+                    break;
+                }
                 one_frame_len = (frame[total_frame_len - i + 2] << 8 | frame[total_frame_len - i + 3]) + 4;
+                #if sysADVERTISE_MODE_ENABLED
+                /* V851 F4 reply uses 0004 although its payload is nine bytes. */
+                if(uart == &Uart_R11 && frame[total_frame_len - i + 4] == 0xF4U &&
+                   (one_frame_len == 8U || one_frame_len == 13U))
+                {
+                    one_frame_len = 13U;
+                    if(i < one_frame_len)
+                    {
+                        keep_r11_fragment = 1U;
+                        break;
+                    }
+                }
+                #endif
+                if(one_frame_len < 5U)
+                {
+                    i--;
+                    continue;
+                }
                 if(i < one_frame_len)
                 {
                     break;
@@ -700,9 +748,18 @@ void UartReadFrame(UART_TYPE *uart)
                 UartR11UserAdvertiseProtocol(uart, &frame[total_frame_len - i], one_frame_len);
                 #endif /* sysADVERTISE_MODE_ENABLED */
                 i -= one_frame_len;
-            }else if(frame[total_frame_len - i] == 0xaa && frame[total_frame_len - i + 1] == 0xCC)
+            }else if(i >= 2U && frame[total_frame_len - i] == 0xaa && frame[total_frame_len - i + 1] == 0xCC)
             {
+                if(i < 4U)
+                {
+                    break;
+                }
                 one_frame_len = (frame[total_frame_len - i + 2] << 8 | frame[total_frame_len - i + 3]) + 4;
+                if(one_frame_len < 5U)
+                {
+                    i--;
+                    continue;
+                }
                 if(i < one_frame_len)
                 {
                     break;
@@ -715,6 +772,10 @@ void UartReadFrame(UART_TYPE *uart)
             #if uartMODBUS_PROTOCOL_ENABLED
             else if(frame[total_frame_len - i] == modbusSLAVE_ADDRESS)
             {
+                if(i < 3U)
+                {
+                    break;
+                }
                 one_frame_len = frame[total_frame_len - i + 2] + 5;
                 if(i < one_frame_len)
                 {
@@ -759,6 +820,15 @@ void UartReadFrame(UART_TYPE *uart)
                 }
             }
         }
+        #if sysADVERTISE_MODE_ENABLED
+        if(keep_r11_fragment != 0U)
+        {
+            /* Advertise mode maps Uart_R11 to UART5. The ISR can append while
+             * parsing; only rewind the consumer, preserving its current head. */
+            uart->RxTail = (rx_head_bak + uartUART5_RXBUF_SIZE - i) % uartUART5_RXBUF_SIZE;
+            uart->RxFlag = UART_RECING;
+        }
+        #endif
     }
 }
 

@@ -24,5 +24,10 @@
 /resources
 /docs/*.md
 
+# Keep protocol regression coverage with the timezone implementation.
+!/tests/test_timezone.py
+!/tests/test_timezone_uart.py
+!/tests/test_app_ready.py
+
 
 
