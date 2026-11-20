@@ -82,7 +82,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define JPG 2
 
 #define MAX_MP3_NAME_LEN  		32
-#define MAX_VOLUME              40
+#define MAX_VOLUME              100
 #define MAX_WIFI_NAME_LEN 		32
 #define CHECK_NET_STATUS_ADDR       0x0570
 #define CHECK_DEVICE_STATUS_ADDR    0x0571
@@ -120,7 +120,7 @@ extern VIDEO_INIT_PROCESS video_init_process;
 #define cmdMP4_NEXTFILE           	0x62
 #define cmdMP4_PLAY                	0x66
 #define cmdMP4_PAUSE               	0x65
-#define cmdMP4_REPLAY              	0x75
+#define cmdMP4_REPLAY              	0x78
 #define cmdMP4_SWITCH                0x76
 #define cmdMP4_STATE                 0x64
 #define cmdMP4_STOP					0x67
