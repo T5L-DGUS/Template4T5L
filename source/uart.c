@@ -371,10 +371,17 @@ static void UartStandardDwin8283Protocal(UART_TYPE *uart,uint8_t *frame, uint16_
             return;
         }
 
-        if(frame[6]==0x4F&&frame[7]==0x4B){
-            T5l_Stc_UartRxProcess(((uint32_t)frame[4] << 8) | frame[5]);
+        if((frame[6]==0x4F) && (frame[7]==0x4B))
+        {
+            T5l_Stc_UartRxProcess((uint16_t)(((uint32_t)frame[4] << 8) | frame[5]), 1U);
             return;
         }
+        if((frame[6]==0x45) && (frame[7]==0x52))
+        {
+            T5l_Stc_UartRxProcess((uint16_t)(((uint32_t)frame[4] << 8) | frame[5]), 0U);
+            return;
+        }
+        
         write_dgus_vp(((uint32_t)frame[4] << 8) | frame[5], &frame[6], (frame[2] - 3) >> 1);
         
         STC_ReporData_Procese(((uint32_t)frame[4] << 8) | frame[5]);

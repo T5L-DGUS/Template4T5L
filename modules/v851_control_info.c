@@ -696,10 +696,10 @@ uint8_t V851ControlInfoApplySegment(uint8_t struct_type,
 
     if(changed != 0U)
     {
-        write_dgus_vp(address, record, command_words);
-        (void)T5lStcSyncMappedControl((T5lStcMappedControl)index,
-                                      mapped_mask, enabled, secondary,
-                                      tertiary);
+        write_dgus_vp(address+1, (uint8_t*)&record[2], command_words-1);
+        // (void)T5lStcSyncMappedControl((T5lStcMappedControl)index,
+        //                               mapped_mask, enabled, secondary,
+        //                               tertiary);
         if((mapped_mask & T5L_STC_MAPPED_FIELD_ENABLED) != 0U)
         {
             V851ControlInfoApplySwitch(struct_type, enabled, record);

@@ -27,3 +27,20 @@
 !/docs/v851_factory_flash.md
 !/tests/v851_factory_mock.h
 !/tests/v851_factory_cases.h
+
+
+# Oxygen cabin sources and reproducible build/test tools.
+!/scripts/
+/scripts/*
+!/scripts/yangcang/
+!/tests/test_yangcang*.py
+!/tests/yangcang_*.c
+!/tests/yangcang_*.h
+!/docs/yangcang-*.md
+/project/Objects_HOR/
+/project/Objects_VER/
+/project/Listings_HOR/
+/project/Listings_VER/
+/project/yangcang-*.log
+/project/yangcang-build-manifest.json
+**/__pycache__/

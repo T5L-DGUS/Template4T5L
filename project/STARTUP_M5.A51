@@ -213,7 +213,7 @@ PPAGE_SFR       DATA    0A0H
 ?STACK          SEGMENT   IDATA
 
                 RSEG    ?STACK
-                DS      20
+                DS      48
 
                 EXTRN CODE (?C_START)
                 PUBLIC  ?C_STARTUP

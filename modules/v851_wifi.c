@@ -159,7 +159,7 @@ static void V851WifiSelect(uint8_t list_index)
         return;
     }
     write_dgus_vp(V851_WIFI_SSID_ADDR, ssid, V851_WIFI_SSID_MAX / 2U);
-    V851WifiClearList();
+    // V851WifiClearList();
     V851WifiSwitchIfEnabled(v851_wifi_page.detail_flag,
                             v851_wifi_page.detail_page);
 }
@@ -246,7 +246,7 @@ void V851WifiTask(void)
 {
     uint16_t key;
     const uint16_t zero = 0U;
-
+    
     key = 0U;
     /* 连接动画固定显示 25s，到点关闭动画并跳回 WiFi 扫描页 */
     if((v851_wifi_connect_anim != 0U) &&
@@ -290,7 +290,7 @@ static void V851WifiHandleScanResult(const uint8_t *frame, uint16_t len)
     uint16_t offset;
     uint16_t ssid_length;
     uint8_t list_index;
-
+    write_dgus_vp(0x5300,"\x30\xA1",1);
     V851WifiClearList();
     if((len < 6U) || (frame[5] != 0x01U))
     {

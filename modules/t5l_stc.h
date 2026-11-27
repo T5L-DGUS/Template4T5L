@@ -2,14 +2,14 @@
 #define __T5L_STC_H__
 
 #include "sys.h"
-#define T5LTOSTC_TASK_INTERVAL1 (1)
+#define T5LTOSTC_TASK_INTERVAL1 (20)
 #define T5LTOSTC_TASK_INTERVAL2 (500)
 //===宏
 #define ON (1)
 #define OFF (0)
 
 
-
+#define H_F_TIME_S 3600
 
 #define LIGHT_ADD_SUB_VP 0x5350
 #define LIGHT_VALUE 0x5351
@@ -38,6 +38,65 @@
 #define PLASMA_VP (0x5120)
 #define ANION_VP (0x5124)
 #define LOCK_VP (0x5128)
+
+/*================ 事件/告警上报 VP（布局见 Docs/VP地址规划.xlsx §53） ================
+  事件：0x3100 + 序号，1 = 触发待上报（上报方读后清 0）
+  参数：0x3130 ~ 0x3134
+  告警：0x3200 + 序号，0 = 正常，1 = 告警发生（未恢复）
+  code 与序号的对应关系以 xlsx 为准，改动需同步文档。 */
+#define EV_VP_BASE        0x3100U
+#define EV_PARAM_VP_BASE  0x3130U
+#define ALM_VP_BASE       0x3200U
+
+/* 事件序号 */
+#define EV_IDX_VIDEO_SESSION_STARTED   0U
+#define EV_IDX_VIDEO_SESSION_FAILED    1U
+#define EV_IDX_VIDEO_SESSION_STOPPED   2U
+#define EV_IDX_CLIMATE_TARGET_REACHED  3U
+#define EV_IDX_HUMIDIFIER_CYCLE_DONE   4U
+#define EV_IDX_HUMIDIFIER_REFILLED     5U
+#define EV_IDX_FILTER_LIFE_LOW         6U
+#define EV_IDX_FILTER_RESET            7U
+#define EV_IDX_DEVICE_REBOOTED         8U
+#define EV_IDX_DEVICE_TIME_SYNCED      9U
+#define EV_IDX_DEVICE_RECOVERED        10U
+#define EV_IDX_MAX                     11U
+
+/* 事件参数序号 */
+#define EV_PARAM_IDX_REMAIN_H    0U
+#define EV_PARAM_IDX_PERIOD_M    1U
+#define EV_PARAM_IDX_REBOOT      2U
+#define EV_PARAM_IDX_FAULT_CODE  3U
+#define EV_PARAM_IDX_VIDEO_STOP  4U
+
+/* 告警序号 */
+#define ALM_IDX_TEMP_HIGH                 0U
+#define ALM_IDX_TEMP_LOW                  1U
+#define ALM_IDX_TEMP_SENSOR_FAULT         2U
+#define ALM_IDX_HEATER_FAULT              3U
+#define ALM_IDX_HEATER_NO_RISE            4U
+#define ALM_IDX_OVERHEAT_PROTECTION       5U
+#define ALM_IDX_LIQUID_LOW_WARNING        6U
+#define ALM_IDX_LOW_LIQUID                7U
+#define ALM_IDX_NEBULIZER_DRY_BURN        8U
+#define ALM_IDX_WATER_LEVEL_SENSOR_FAULT  9U
+#define ALM_IDX_HUMIDITY_SENSOR_FAULT     10U
+#define ALM_IDX_EXHAUST_FAN_FAULT         11U
+#define ALM_IDX_ANION_FAN_FAULT           12U
+#define ALM_IDX_PLASMA_FAN_FAULT          13U
+#define ALM_IDX_FILTER_LIFE_EXHAUSTED     14U
+#define ALM_IDX_ANION_FAULT               15U
+#define ALM_IDX_PLASMA_FAULT              16U
+#define ALM_IDX_WATCHDOG_RESET            17U
+
+#define FILTER_LIFE_LOW_HOURS   120U   /* filter.life_low 触发阈值（小时） */
+
+/* 进风机1/2 与 左(等离子)/右(负离子) 的对应关系
+   （已确认：进风机1 = 左进风 = 等离子，进风机2 = 右进风 = 负离子）：
+   1 = 进风机1 是左进风（等离子）；0 = 相反 */
+#define INLET_FAN1_IS_LEFT   1
+
+#define EV_BIT(i)   ((uint16_t)(1U << (i)))   /* 事件位图掩码 */
 
 /* V851/DGUS report VPs for the mapped actuator state. */
 #define T5L_STC_REPORT_EXHAUST_VP       0x301A
@@ -83,7 +142,7 @@ typedef enum
    0x6110 加热功能(0/1)     0x6111 加热设定温度(℃)
    0x6112 雾化功能(0/1)     0x6113 雾化运行时间(min)  0x6114 雾化间隔时间(min)
    0x6115 排风功能(0/1)     0x6116 排风档位(0~6)      0x6117 排风间隔时间(min)
-   0x6118 UVB功能(0/1)      0x6119 UVB档位(0~4)       0x611A UVB间隔时间(min)
+   0x6118 UVB功能(0/1)      0x6119 UVB档位(0~4)       0x611A UVB运行时间(min)
    0x611B 紫外消杀功能(0/1) 0x611C 紫外消杀时间(min)
    0x611D STC复位通知(STC→T5L，1=已复位，屏端据此重新同步)
    文档未定义新地址的功能沿用原 0x6101~0x610F
@@ -284,12 +343,12 @@ typedef struct
 {
     uint8_t ligth_value;
     uint8_t off_display_flag; //高4位=1 进入屏保&息屏    (低4位=1屏保  =2息屏 =3常亮不变)
-    uint16_t off_display_time_min;
+    uint16_t off_display_time_min; //1=5min   2=10min  3=15min
     uint16_t off_display_time_s;
 
     uint16_t temp_uint;   //温度单位 1=°C   2=°F
     uint16_t volume;      //音量
-    uint16_t screen_save; // 1屏保  2息屏 3无
+    uint16_t screen_mode; // 1屏保  2息屏 3无
     uint16_t language; //1中文  2英文  3韩文  4日语
     uint8_t passwd[7];
     uint8_t save_flag;
@@ -338,7 +397,8 @@ typedef struct
 typedef struct
 {
     St_Exhaust Exhaust;
-    St_InWind Inlet_Fan;
+    St_InWind Inlet_Fan;    // 进风机1（左右区分见 INLET_FAN1_IS_LEFT）
+    St_InWind Inlet_Fan2;   // 进风机2：开关/档位与 Inlet_Fan 共用，仅用于区分左右风机的故障反馈
     St_Heater Heater;
     St_Mist Humidifier;
     St_Light Light;
@@ -370,13 +430,13 @@ uint8_t T5lStcSyncLocalMappedControl(T5lStcMappedControl control,
                                      uint16_t secondary,
                                      uint16_t tertiary);
 
-extern void T5l_Stc_Init(void);
-extern void Queue_Time_Check(void);
-extern void T5L_Stc_Poll(void);
-extern void key_scanf(void);
-extern void Sys_Cfg(void);
-extern void SysCfg_Init();
-extern void Dev_Time_Check();
+void T5l_Stc_Init(void);
+void Queue_Time_Check(void);
+void T5L_Stc_Poll(void);
+void key_scanf(void);
+void Sys_Cfg(void);
+void SysCfg_Init();
+void Dev_Time_Check();
 void Dev_Aotu_Procese();
 void Flash_DataInit(void);
 void Flash_SaveData();
@@ -387,6 +447,8 @@ void nor_flash_read(uint32_t addr, uint8_t* buf, uint16_t len);
 void T5l_Stc_UartRxProcess(uint16_t addr, uint8_t result);
 void STC_ReporData_Procese(uint32_t addr);
 uint8_t check_passwd_format(uint8_t *u8buf );
+/* 修改系统密码：0=成功 1=旧密码错误 2=格式不合法 */
+uint8_t Set_Sys_Password(uint8_t* old_passwd, uint8_t* new_passwd, uint8_t* confirm_passwd);
 
 
 void Exhaust_On();
@@ -406,27 +468,21 @@ void Humidifier_Off(uint8_t auto_flag);
 
 void Send_Cmd_Ctrl(uint16_t cmdword, uint16_t value);
 void Send_Cmd_Block(uint16_t cmdword, uint16_t *words, uint8_t count);
-// void Anion_On(void);
-// void Anion_Off(void);
-// void Plasma_On(void);
-// void Plasma_Off(void);
 
-
-// void SMALL_FAN_On();
-// void SMALL_FAN_Off();
-// void MicLed_On();
-// void MicLed_Off();
-// void CameraLed_On();
-// void CameraLed_Off();
 
 void Dev_Switch_Ctrl(uint16_t *pEnable, uint16_t cmdWord, uint8_t bOn);
+void Reset_Filter(uint8_t month);//滤芯设置
+void Set_Sys_Display(uint8_t brightness_percent,uint8_t screen_timeout_minutes,uint8_t screen_mode);
+void Set_Sys_Temperature_Unit(uint16_t Unit);
+void Set_Sys_Language(uint16_t language_tpye);
+void Set_Sys_Volume(uint8_t volume);
+uint8_t Set_Sys_Password(uint8_t* old_passwd,uint8_t* new_passwd,uint8_t* confirm_passwd);
 
 
 
 void Mult_Task();
 void PageFunction(void);
+void EventAlarmVp_Updata(void);   /* 事件/告警/参数写入 0x3100/0x3130/0x3200 */
 
-void Set_Temperature_Unit(uint16_t Unit);
-void Language_Init(uint16_t language_tpye);
 
 #endif
